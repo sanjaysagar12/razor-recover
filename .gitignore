@@ -11,3 +11,5 @@ logs/*.log
 .DS_Store
 Thumbs.db
 .claude
+
+models/artifacts/*.joblib
