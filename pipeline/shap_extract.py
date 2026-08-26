@@ -298,6 +298,13 @@ def get_case_facts(row_id: str) -> dict:
     for col in fact_cols:
         value = row[col]
         facts[col] = None if pd.isna(value) else _to_jsonable(value)
+    # Phase 6's network_retry_cap_exceeded guardrail wants a trailing-30-day
+    # cross-transaction retry count, but case_id is a single transaction with
+    # no customer identity or timestamp linking it to other transactions in
+    # this data model -- a true 30-day rolling count isn't derivable. This is
+    # an honestly-named same-transaction proxy (this case's own retry count
+    # so far) rather than a mislabeled 30-day figure.
+    facts["cumulative_retries_this_txn"] = facts["retry_attempt_number"]
     return facts
 
 
