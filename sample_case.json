@@ -1,0 +1,28 @@
+{
+  "case_id": "case_test_0001",
+  "tree_model_score": 0.44,
+  "shap_top_features": [
+    {"feature": "historical_ptp_honor_rate", "value": 0.69, "shap_value": 0.29},
+    {"feature": "ltv_tier", "value": "low", "shap_value": -0.20},
+    {"feature": "payment_rail", "value": "emandate", "shap_value": -0.15}
+  ],
+  "case_facts": {
+    "case_id": "case_test_0001",
+    "decline_code": "issuer_unavailable",
+    "guardrail_flags": null,
+    "retry_attempt_number": 1,
+    "hours_since_last_attempt": 56.0,
+    "customer_tenure_days": 358,
+    "historical_ptp_honor_rate": 0.69,
+    "amount": 662.42,
+    "amount_vs_historical_avg": 0.85,
+    "prior_retry_success_count": 0,
+    "is_peak_execution_window": false,
+    "decline_code_bucket": "AMBIGUOUS",
+    "ltv_tier": "low",
+    "time_of_day_bucket": "evening",
+    "day_of_week": "sat",
+    "issuer_bank_risk_tier": "low_risk",
+    "payment_rail": "emandate"
+  }
+}

@@ -1,0 +1,1377 @@
+[
+  {
+    "case_id": "case_0000",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0000",
+      "tree_model_score": 0.460502485416429,
+      "tree_model_top_features": [
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.23139584086137474
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": 0.23021574260861416
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": -0.14636252025225663
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.65,
+      "reasoning_summary": "The SHAP features provided are: ltv_tier, historical_ptp_honor_rate, customer_tenure_days, payment_rail, and issuer_bank_risk_tier. The positive shap_value for ltv_tier (0.28) and customer_tenure_days (0.23) push towards recovery. However, the negative shap_value for historical_ptp_honor_rate (-0.23), payment_rail (-0.15), and issuer_bank_risk_tier (-0.12) push against it. The negative impact of historical_ptp_honor_rate is significant. Given the mix of positive and negative drivers, and the absence of a clear strong signal in either direction, a retry now is the most appropriate action, though confidence is moderate.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:02.452430+00:00"
+    }
+  },
+  {
+    "case_id": "case_0001",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0001",
+      "tree_model_score": 0.44782182231893175,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.28606168341370797
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": -0.14636252025225663
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": -0.1383987598343003
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.7,
+      "reasoning_summary": "The top features driving the decision are historical_ptp_honor_rate with a POSITIVE shap_value, indicating a favorable past payment history that supports recovery. However, several features pushed against recovery: ltv_tier with a NEGATIVE shap_value, payment_rail with a NEGATIVE shap_value, customer_tenure_days with a NEGATIVE shap_value, and issuer_bank_risk_tier with a NEGATIVE shap_value. Despite the negative signals from ltv_tier, payment_rail, customer_tenure_days, and issuer_bank_risk_tier, the POSITIVE contribution of historical_ptp_honor_rate suggests that retrying the payment now is the most appropriate action.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:04.063774+00:00"
+    }
+  },
+  {
+    "case_id": "case_0005",
+    "routed_to_llm": true,
+    "final_action": "escalate_human",
+    "llm_output": {
+      "case_id": "case_0005",
+      "tree_model_score": 0.4887452180446278,
+      "tree_model_top_features": [
+        {
+          "feature": "prior_retry_success_count",
+          "shap_value": -0.33871676033139303
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "retry_attempt_number",
+          "shap_value": -0.17057923296627214
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": 0.1391153012905796
+        }
+      ],
+      "recommended_action": "escalate_human",
+      "action_scheduled_for": null,
+      "confidence": 0.8,
+      "reasoning_summary": "The top features pushing toward non-recovery are prior_retry_success_count with a negative shap_value of -0.3387 and retry_attempt_number with a negative shap_value of -0.1706. These suggest a history of retries not succeeding and reaching a retry limit. However, ltv_tier with a positive shap_value of 0.2798 and issuer_bank_risk_tier with a positive shap_value of 0.2656 are pushing toward recovery. The customer tenure days feature also has a positive shap_value of 0.1391, further supporting recovery. Despite some positive indicators, the negative signals from retry metrics and the presence of a guardrail flag 'npci_retry_cap_reached' make it ambiguous. Given the conflicting signals and the retry cap, human escalation is recommended for review.",
+      "guardrail_flags": [
+        "npci_retry_cap_reached"
+      ],
+      "requires_human_review": true,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:05.709445+00:00"
+    }
+  },
+  {
+    "case_id": "case_0007",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0007",
+      "tree_model_score": 0.48807043019634855,
+      "tree_model_top_features": [
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "amount",
+          "shap_value": 0.1295085288169519
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        },
+        {
+          "feature": "hours_since_last_attempt",
+          "shap_value": 0.12023979499551157
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.75,
+      "reasoning_summary": "The SHAP top features for this case are: ltv_tier, amount, payment_rail, hours_since_last_attempt, issuer_bank_risk_tier. A negative shap_value for ltv_tier (-0.201) suggests a non-recovery push, while positive shap_values for amount (0.130), payment_rail (0.122), and hours_since_last_attempt (0.120) push towards recovery. The negative shap_value for issuer_bank_risk_tier (-0.120) also pushes towards non-recovery. Given the mix of positive and negative drivers, and the fact that the most negative driver (ltv_tier) is offset by multiple positive drivers, a retry now action is recommended. The confidence is moderate due to the conflicting signals.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:07.256381+00:00"
+    }
+  },
+  {
+    "case_id": "case_0011",
+    "routed_to_llm": true,
+    "final_action": "prompt_alt_payment",
+    "llm_output": {
+      "case_id": "case_0011",
+      "tree_model_score": 0.44355386162708954,
+      "tree_model_top_features": [
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": -0.14636252025225663
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.12749525137163875
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        },
+        {
+          "feature": "prior_retry_success_count",
+          "shap_value": 0.1034309920825466
+        }
+      ],
+      "recommended_action": "prompt_alt_payment",
+      "action_scheduled_for": null,
+      "confidence": 0.75,
+      "reasoning_summary": "The top SHAP features for this case are: decline_code_bucket, payment_rail, ltv_tier, issuer_bank_risk_tier, and prior_retry_success_count. The positive shap_value for decline_code_bucket (0.397) suggests this is a recoverable decline type. However, the negative shap_value for payment_rail (-0.146), ltv_tier (-0.127), and issuer_bank_risk_tier (-0.119) all push towards non-recovery. The positive shap_value for prior_retry_success_count (0.103) is a small positive push towards recovery, but the presence of 0 prior retries means this feature's value is effectively indicating no history of success. Given the mixed signals, particularly the negative impact of payment_rail and issuer risk, and that the decline is insufficient funds which can be persistent, prompting an alternative payment method is the most prudent action. The anomalous_amount guardrail flag is unranked context, not a SHAP-attributed driver.",
+      "guardrail_flags": [
+        "anomalous_amount"
+      ],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:08.980933+00:00"
+    }
+  },
+  {
+    "case_id": "case_0012",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0012",
+      "tree_model_score": 0.3996520118399121,
+      "tree_model_top_features": [
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.25847687587349405
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": 0.21919438607451347
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": 0.15780932248589885
+        },
+        {
+          "feature": "amount",
+          "shap_value": 0.15619290438267625
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.75,
+      "reasoning_summary": "The top features indicate conflicting signals. The NEGATIVE shap_value for `issuer_bank_risk_tier` (-0.258) suggests that a high-risk issuer bank pushes against recovery. However, the POSITIVE shap_value for `day_of_week` (0.219) indicates that being a Monday pushes toward recovery. The NEGATIVE shap_value for `ltv_tier` (-0.201) suggests that a low LTV tier pushes against recovery. The POSITIVE shap_value for `customer_tenure_days` (0.158) indicates that longer customer tenure pushes toward recovery, as does the POSITIVE shap_value for `amount` (0.156), suggesting that this specific transaction amount supports recovery. Given the mixed signals and the `decline_code_bucket` being 'AMBIGUOUS', a retry is warranted, but confidence is moderate.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:10.642958+00:00"
+    }
+  },
+  {
+    "case_id": "case_0013",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0013",
+      "tree_model_score": 0.5758708875854928,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.2664016144534096
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": 0.21919438607451347
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": 0.1541231774614697
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.8,
+      "reasoning_summary": "The SHAP features indicate a positive inclination towards recovery. The positive shap_value for historical_ptp_honor_rate (0.266) suggests a good past payment history, while the positive shap_value for day_of_week (0.219) might indicate favorable timing. The positive shap_value for customer_tenure_days (0.154) and payment_rail (0.122) further support recovery. Although ltv_tier has a negative shap_value (-0.201), the aggregate of positive drivers suggests a retry is warranted. The decline code '05_do_not_honor' is present, which is often retryable. Given the overall positive SHAP values, a retry now action is recommended.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:12.085165+00:00"
+    }
+  },
+  {
+    "case_id": "case_0016",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0016",
+      "tree_model_score": 0.4670924513765688,
+      "tree_model_top_features": [
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": 0.2083621685352128
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "amount",
+          "shap_value": -0.14788980605549468
+        },
+        {
+          "feature": "hours_since_last_attempt",
+          "shap_value": 0.12335081455757954
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.85,
+      "reasoning_summary": "The top features indicate a recovery path. The positive shap_value for 'decline_code_bucket' (0.397) suggests the decline was a soft one, likely recoverable.  'customer_tenure_days' also has a positive shap_value (0.208), indicating longer customer tenure is favorable for recovery. 'hours_since_last_attempt' has a positive shap_value (0.123), implying sufficient time has passed since the last attempt. Offsetting these are negative shap_values for 'ltv_tier' (-0.201), suggesting low LTV is unfavorable, and 'amount' (-0.148), indicating larger amounts are less favorable. However, the positive indicators, particularly the soft decline code bucket and customer tenure, outweigh the negative ones, leading to a recommendation for immediate retry.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:13.924128+00:00"
+    }
+  },
+  {
+    "case_id": "case_0022",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0022",
+      "tree_model_score": 0.5192971133768083,
+      "tree_model_top_features": [
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": -0.1750338202098383
+        },
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.13121503850580982
+        },
+        {
+          "feature": "time_of_day_bucket",
+          "shap_value": -0.12883244889996573
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.12749525137163875
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.65,
+      "reasoning_summary": "The top features for this case are issuer_bank_risk_tier with a POSITIVE shap_value, day_of_week with a NEGATIVE shap_value, historical_ptp_honor_rate with a POSITIVE shap_value, time_of_day_bucket with a NEGATIVE shap_value, and ltv_tier with a NEGATIVE shap_value. The POSITIVE contribution from issuer_bank_risk_tier and historical_ptp_honor_rate suggests a potential for recovery. However, the NEGATIVE contributions from day_of_week, time_of_day_bucket, and ltv_tier indicate some headwinds. Given the model's score of 0.519, which is in the ambiguous mid-band, and the mixed signals from the SHAP values, a retry is recommended due to the positive indicators, but with moderate confidence. The case facts show this is a retry attempt number 1, which does not strongly favor or disfavor a retry.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:15.578103+00:00"
+    }
+  },
+  {
+    "case_id": "case_0027",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0027",
+      "tree_model_score": 0.42779779737883017,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.35452976601842273
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "amount",
+          "shap_value": -0.23894440325944447
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": -0.1750338202098383
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.85,
+      "reasoning_summary": "The top positive SHAP feature is historical_ptp_honor_rate with a shap_value of 0.3545, indicating a strong push towards recovery. The second positive SHAP feature, issuer_bank_risk_tier with a shap_value of 0.2656, also contributes positively to recovery. These are partially offset by negative SHAP features: amount with a shap_value of -0.2389, ltv_tier with a shap_value of -0.2012, and day_of_week with a shap_value of -0.1750. The positive indicators outweigh the negative ones, suggesting a retry is appropriate. The case_facts indicate this is the first retry attempt. Given the strength of the positive SHAP values, a retry now is recommended.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:17.122054+00:00"
+    }
+  },
+  {
+    "case_id": "case_0032",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0032",
+      "tree_model_score": 0.5025374102393025,
+      "tree_model_top_features": [
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": 0.1493838481443465
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.12749525137163875
+        },
+        {
+          "feature": "prior_retry_success_count",
+          "shap_value": -0.11764288412442325
+        },
+        {
+          "feature": "amount",
+          "shap_value": 0.1122704420633292
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.75,
+      "reasoning_summary": "The SHAP top features indicate a positive influence on recovery from 'issuer_bank_risk_tier' (shap_value: 0.266) and 'customer_tenure_days' (shap_value: 0.149). The 'amount' also has a positive shap value (shap_value: 0.112). However, 'ltv_tier' (shap_value: -0.127) and 'prior_retry_success_count' (shap_value: -0.118) push towards non-recovery. Given the mixed signals, and the positive contributions from issuer risk, tenure, and amount, a retry is warranted. The 'decline_code_bucket' of 'AMBIGUOUS' in the case facts provides context but is not a direct SHAP-attributed driver for this decision.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:18.955152+00:00"
+    }
+  },
+  {
+    "case_id": "case_0037",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0037",
+      "tree_model_score": 0.44524045358511694,
+      "tree_model_top_features": [
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": 0.15966793820086891
+        },
+        {
+          "feature": "hours_since_last_attempt",
+          "shap_value": -0.12397524062682319
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.75,
+      "reasoning_summary": "The top features indicate a push towards recovery. The positive shap_value for `day_of_week` (0.1597) and `payment_rail` (0.1222) suggest these factors are favorable. Although `ltv_tier` has a NEGATIVE shap_value (-0.2012), indicating a non-recovery push, and `hours_since_last_attempt` has a NEGATIVE shap_value (-0.1240) and `issuer_bank_risk_tier` has a NEGATIVE shap_value (-0.1196), the combined positive influences are stronger. Given the ambiguous decline code and the mixed signals from the SHAP features, a retry now is the most appropriate action with moderate confidence.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:20.431391+00:00"
+    }
+  },
+  {
+    "case_id": "case_0038",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0038",
+      "tree_model_score": 0.5313720981044626,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.6308442191844783
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": 0.15966793820086891
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.12749525137163875
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        },
+        {
+          "feature": "prior_retry_success_count",
+          "shap_value": 0.1034309920825466
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.85,
+      "reasoning_summary": "The top features driving the model's decision are: a POSITIVE shap_value for 'historical_ptp_honor_rate' (0.63), indicating a high likelihood of payment success based on past behavior. A POSITIVE shap_value for 'day_of_week' (0.16) also slightly favors recovery. However, there are some negative influences: a NEGATIVE shap_value for 'ltv_tier' (-0.13) and a NEGATIVE shap_value for 'issuer_bank_risk_tier' (-0.12) suggest potential concerns related to customer value and issuer risk. Finally, a POSITIVE shap_value for 'prior_retry_success_count' (0.10) provides a small positive push towards recovery. Given the strong positive signal from 'historical_ptp_honor_rate' and the relatively low number of prior retries (0), a retry now is recommended.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:21.947022+00:00"
+    }
+  },
+  {
+    "case_id": "case_0043",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0043",
+      "tree_model_score": 0.39098089091843263,
+      "tree_model_top_features": [
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.25847687587349405
+        },
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.21513918670182097
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.12749525137163875
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.75,
+      "reasoning_summary": "The top SHAP features for this case are:\n- decline_code_bucket (positive shap_value)\n- issuer_bank_risk_tier (negative shap_value)\n- historical_ptp_honor_rate (negative shap_value)\n- ltv_tier (negative shap_value)\n- payment_rail (positive shap_value)\n\nThe positive shap_value for 'decline_code_bucket' indicates a favorable push towards recovery, likely because the bucket 'CLEAR_SOFT' suggests a recoverable decline. The positive shap_value for 'payment_rail' also slightly favors recovery. However, the negative shap_values for 'issuer_bank_risk_tier', 'historical_ptp_honor_rate', and 'ltv_tier' are acting against recovery. Specifically, a 'high_risk' issuer bank and a 'high' LTV tier, combined with a low 'historical_ptp_honor_rate', are negative indicators. Despite these negative signals, the strong positive signal from 'decline_code_bucket' being 'CLEAR_SOFT' suggests a retry is warranted. The retry attempt number is 2, which is not excessively high, and the 'hours_since_last_attempt' is 37.46, indicating sufficient time has passed since the last attempt. Given the 'CLEAR_SOFT' decline code and a relatively moderate number of retry attempts, a retry now is the most appropriate action.",
+      "guardrail_flags": [
+        "possible_ungrounded_reasoning"
+      ],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:23.999351+00:00"
+    }
+  },
+  {
+    "case_id": "case_0046",
+    "routed_to_llm": true,
+    "final_action": "escalate_human",
+    "llm_output": {
+      "case_id": "case_0046",
+      "tree_model_score": 0.3635033552228524,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.40062292433551105
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": 0.15966793820086891
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        }
+      ],
+      "recommended_action": "escalate_human",
+      "action_scheduled_for": null,
+      "confidence": 0.3,
+      "reasoning_summary": "The top features indicate a non-recovery path. The NEGATIVE shap_value for historical_ptp_honor_rate (-0.40) suggests a low probability of successful payment. The NEGATIVE shap_value for ltv_tier (-0.20) also pushes towards non-recovery, especially given the unranked context that ltv_tier is 'low'. The NEGATIVE shap_value for issuer_bank_risk_tier (-0.12) further supports a non-recovery decision. While day_of_week (0.16) and payment_rail (0.12) have POSITIVE shap_values, they are not strong enough to overcome the negative drivers. The case also has a decline code bucket of 'AMBIGUOUS', and is the first retry attempt, suggesting that further retries without intervention are unlikely to succeed. Given the strong negative indicators, escalation is the most appropriate action.",
+      "guardrail_flags": [],
+      "requires_human_review": true,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:25.654963+00:00"
+    }
+  },
+  {
+    "case_id": "case_0047",
+    "routed_to_llm": true,
+    "final_action": "retry_scheduled",
+    "llm_output": {
+      "case_id": "case_0047",
+      "tree_model_score": 0.4193278576409699,
+      "tree_model_top_features": [
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "retry_attempt_number",
+          "shap_value": -0.25870134593777805
+        },
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.1587069726216886
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.12749525137163875
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        }
+      ],
+      "recommended_action": "retry_scheduled",
+      "action_scheduled_for": "2024-03-18T11:53:36Z",
+      "confidence": 0.6,
+      "reasoning_summary": "The SHAP features indicate that the positive shap_value for issuer_bank_risk_tier (0.266) pushes towards recovery, suggesting a medium-risk issuer is not a strong deterrent. However, the negative shap_value for retry_attempt_number (-0.259) and historical_ptp_honor_rate (-0.159), along with the negative shap_value for ltv_tier (-0.127), all push against recovery. The positive shap_value for payment_rail (0.122) offers a slight push toward recovery. Given the conflicting signals and the ambiguity of the score, a scheduled retry is appropriate. The number of retry attempts (5) is high, and the historical payment honor rate (0.397) is relatively low, which are negative indicators. The medium risk issuer bank tier and card payment rail are positive indicators. Without more clarity on why the case is ambiguous, a scheduled retry allows for another attempt after a period.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:27.692202+00:00"
+    }
+  },
+  {
+    "case_id": "case_0048",
+    "routed_to_llm": true,
+    "final_action": "escalate_human",
+    "llm_output": {
+      "case_id": "case_0048",
+      "tree_model_score": 0.3436621842068005,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.3394604721392194
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.25847687587349405
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": 0.21919438607451347
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": -0.1850021647860116
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": -0.14636252025225663
+        }
+      ],
+      "recommended_action": "escalate_human",
+      "action_scheduled_for": null,
+      "confidence": 0.2,
+      "reasoning_summary": "The SHAP top features for this case are: historical_ptp_honor_rate, issuer_bank_risk_tier, day_of_week, customer_tenure_days, payment_rail. The negative shap_value for historical_ptp_honor_rate (-0.339) indicates a low honor rate, pushing towards non-recovery. The negative shap_value for issuer_bank_risk_tier (-0.258) indicates a high-risk issuer, also pushing towards non-recovery. The negative shap_value for customer_tenure_days (-0.185) suggests shorter customer tenure, which is unfavorable. The negative shap_value for payment_rail (-0.146) associated with 'emandate' is unfavorable. The positive shap_value for day_of_week (0.219) is the only positive driver, suggesting Monday might be more favorable for recovery. However, the strong negative drivers, particularly the low historical_ptp_honor_rate and high-risk issuer, outweigh the positive signal from the day of the week. Given the ambiguous decline code and multiple strong negative SHAP drivers, escalation is recommended for human review.",
+      "guardrail_flags": [],
+      "requires_human_review": true,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:29.635770+00:00"
+    }
+  },
+  {
+    "case_id": "case_0057",
+    "routed_to_llm": true,
+    "final_action": "no_retry_prompt_update",
+    "llm_output": {
+      "case_id": "case_0057",
+      "tree_model_score": 0.40215130940350186,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.4394643814546329
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": 0.1849288180227704
+        },
+        {
+          "feature": "time_of_day_bucket",
+          "shap_value": -0.12883244889996573
+        }
+      ],
+      "recommended_action": "no_retry_prompt_update",
+      "action_scheduled_for": null,
+      "confidence": 0.6,
+      "reasoning_summary": "The top features indicate that the case should not be retried at this time. The negative shap_value for historical_ptp_honor_rate (-0.439) suggests a low historical payment performance, pushing away from recovery. Although issuer_bank_risk_tier has a positive shap_value (0.266), indicating lower risk, this is outweighed by other negative factors. The negative shap_value for ltv_tier (-0.201) suggests a low customer lifetime value, also pushing away from recovery. The negative shap_value for time_of_day_bucket (-0.129) indicates the transaction occurred during a less favorable time, further pushing away from recovery. The positive shap_value for customer_tenure_days (0.185) is a favorable factor but not strong enough to overcome the negative drivers.",
+      "guardrail_flags": [],
+      "requires_human_review": true,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:31.291804+00:00"
+    }
+  },
+  {
+    "case_id": "case_0058",
+    "routed_to_llm": true,
+    "final_action": "escalate_human",
+    "llm_output": {
+      "case_id": "case_0058",
+      "tree_model_score": 0.4195819829437811,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.5636303914235997
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "hours_since_last_attempt",
+          "shap_value": -0.1279417905684598
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        }
+      ],
+      "recommended_action": "escalate_human",
+      "action_scheduled_for": null,
+      "confidence": 0.6,
+      "reasoning_summary": "The top features driving the decision are:\n- historical_ptp_honor_rate: A NEGATIVE shap_value (-0.56) strongly pushes towards non-recovery, indicating a poor payment history.\n- ltv_tier: A POSITIVE shap_value (0.28) pushes towards recovery, suggesting a potentially valuable customer.\n- hours_since_last_attempt: A NEGATIVE shap_value (-0.13) pushes towards non-recovery, possibly indicating a recent failure or a need for a cooldown period.\n- payment_rail: A POSITIVE shap_value (0.13) pushes towards recovery, suggesting the payment rail is favorable.\n- issuer_bank_risk_tier: A NEGATIVE shap_value (-0.12) pushes towards non-recovery, indicating potential risk from the issuer's side.\n\nThe strong negative impact of `historical_ptp_honor_rate` and the mixed signals from other features, particularly `ltv_tier` and `issuer_bank_risk_tier`, create ambiguity. While some factors suggest recovery, the very low `historical_ptp_honor_rate` is a significant concern that warrants human review to understand the context and make a nuanced decision.",
+      "guardrail_flags": [],
+      "requires_human_review": true,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:33.036215+00:00"
+    }
+  },
+  {
+    "case_id": "case_0061",
+    "routed_to_llm": true,
+    "final_action": "retry_scheduled",
+    "llm_output": {
+      "case_id": "case_0061",
+      "tree_model_score": 0.3199054630809118,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.6470516835249808
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "retry_attempt_number",
+          "shap_value": -0.25870134593777805
+        },
+        {
+          "feature": "amount",
+          "shap_value": 0.17719480890310563
+        }
+      ],
+      "recommended_action": "retry_scheduled",
+      "action_scheduled_for": "2024-08-01T12:00:00Z",
+      "confidence": 0.7,
+      "reasoning_summary": "The most influential SHAP feature is `historical_ptp_honor_rate` with a NEGATIVE shap_value of -0.647, strongly pushing against recovery. However, this is partially offset by a POSITIVE shap_value of 0.280 for `ltv_tier` and a POSITIVE shap_value of 0.266 for `issuer_bank_risk_tier`. The feature `retry_attempt_number` has a NEGATIVE shap_value of -0.259, indicating that a higher number of retries reduces the likelihood of success. The `amount` feature has a POSITIVE shap_value of 0.177. Given the conflicting signals, particularly the strong negative impact of `historical_ptp_honor_rate` and `retry_attempt_number` versus the positive impacts of `ltv_tier` and `issuer_bank_risk_tier`, a scheduled retry seems appropriate to allow for a potential change in circumstances, although confidence is moderate.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:34.773916+00:00"
+    }
+  },
+  {
+    "case_id": "case_0062",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0062",
+      "tree_model_score": 0.5943254542700157,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.5543211118360357
+        },
+        {
+          "feature": "amount",
+          "shap_value": -0.299526972928646
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.25847687587349405
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": 0.15966793820086891
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.7,
+      "reasoning_summary": "The primary positive driver is the `historical_ptp_honor_rate` with a POSITIVE shap_value, indicating a strong past history of honoring payments. The `ltv_tier` also has a POSITIVE shap_value, which generally suggests a favorable customer segment. However, the `amount` has a NEGATIVE shap_value, suggesting the transaction amount is a deterrent. Additionally, `issuer_bank_risk_tier` has a NEGATIVE shap_value, indicating that the issuing bank's risk profile is unfavorable. The `day_of_week` has a POSITIVE shap_value, but its impact is less significant. Given the strong positive signal from historical honor rate and a positive LTV tier, despite the negative signals from amount and issuer risk, a retry is warranted. The `decline_code` is `05_do_not_honor` and `decline_code_bucket` is `AMBIGUOUS`, which aligns with the tree model's ambiguous output. The number of retry attempts is 2, which is not excessively high.",
+      "guardrail_flags": [
+        "possible_ungrounded_reasoning"
+      ],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:36.321526+00:00"
+    }
+  },
+  {
+    "case_id": "case_0065",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0065",
+      "tree_model_score": 0.44542038820157615,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.5516746885217891
+        },
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "prior_retry_success_count",
+          "shap_value": -0.33871676033139303
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "retry_attempt_number",
+          "shap_value": -0.25870134593777805
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.65,
+      "reasoning_summary": "The SHAP top features indicate a positive push towards recovery with a POSITIVE shap_value for historical_ptp_honor_rate (0.55) and a POSITIVE shap_value for decline_code_bucket (0.39). These suggest a generally good payment history and a soft decline code that might be resolvable. However, there are also NEGATIVE shap_values for prior_retry_success_count (-0.33) and retry_attempt_number (-0.25), indicating previous retries were not successful and this is a high attempt number. The POSITIVE shap_value for issuer_bank_risk_tier (0.26) is also a positive signal, suggesting the issuer is not a high risk. Given the strong positive indicators from honor rate and decline code bucket, despite previous retry failures and a high attempt number, a retry now is recommended. Confidence is moderate due to the conflicting signals from retry history and attempt number.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:38.171581+00:00"
+    }
+  },
+  {
+    "case_id": "case_0075",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0075",
+      "tree_model_score": 0.40201737407948734,
+      "tree_model_top_features": [
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.29565639632210555
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.25847687587349405
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": -0.1750338202098383
+        },
+        {
+          "feature": "amount",
+          "shap_value": 0.14346345421514908
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.7,
+      "reasoning_summary": "The case has a positive shap_value for 'decline_code_bucket' (0.397), indicating a favorable decline code. Additionally, the 'historical_ptp_honor_rate' has a positive shap_value (0.296), suggesting a good payment history. The 'amount' also has a positive shap_value (0.143), indicating a favorable transaction amount. However, 'issuer_bank_risk_tier' has a negative shap_value (-0.258), pushing towards non-recovery, and 'day_of_week' has a negative shap_value (-0.175), also pushing towards non-recovery. Given the strong positive indicators for the decline code and historical performance, a retry is recommended. The presence of a negative shap_value for 'issuer_bank_risk_tier' warrants a confidence level below 1.0.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:39.713180+00:00"
+    }
+  },
+  {
+    "case_id": "case_0078",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0078",
+      "tree_model_score": 0.37816204737725884,
+      "tree_model_top_features": [
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "amount",
+          "shap_value": 0.1372725201892196
+        },
+        {
+          "feature": "prior_retry_success_count",
+          "shap_value": -0.11764288412442325
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": -0.11375828643887254
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.65,
+      "reasoning_summary": "The SHAP features provided are: issuer_bank_risk_tier, ltv_tier, amount, prior_retry_success_count, and day_of_week. The positive shap_value for issuer_bank_risk_tier (0.266) suggests a favorable outlook for recovery, despite the risk tier. However, the negative shap_value for ltv_tier (-0.201) indicates a push towards non-recovery, driven by a 'low' LTV tier. The positive shap_value for amount (0.137) is a slight positive, but less impactful. The negative shap_value for prior_retry_success_count (-0.118) indicates that a previous retry was not successful, pushing towards non-recovery. The negative shap_value for day_of_week (-0.114) suggests that retrying on a Wednesday is less favorable. The case facts indicate this is the third retry attempt and the decline code is '05_do_not_honor' with an 'AMBIGUOUS' bucket. Given the mixed signals, particularly the negative impact of LTV tier and prior retry success, but the strong positive from issuer bank risk tier, a retry now is the most appropriate action, though confidence is moderate due to conflicting drivers.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:41.655173+00:00"
+    }
+  },
+  {
+    "case_id": "case_0081",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0081",
+      "tree_model_score": 0.7813947631337043,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.5580071970389606
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": 0.20520261565713072
+        },
+        {
+          "feature": "time_of_day_bucket",
+          "shap_value": -0.12883244889996573
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.85,
+      "reasoning_summary": "The top features driving the model's decision are: a POSITIVE shap_value for historical_ptp_honor_rate (0.558), indicating a strong positive impact on recovery. A POSITIVE shap_value for ltv_tier (0.280) also suggests a favorable outlook. The issuer_bank_risk_tier has a POSITIVE shap_value (0.266), which is beneficial for recovery. Customer tenure days also contributed POSITIVELY with a shap_value of 0.205. The only feature pushing against recovery is time_of_day_bucket with a NEGATIVE shap_value (-0.129). Given the strong positive indicators and only a minor negative factor, a retry now is recommended.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:43.309170+00:00"
+    }
+  },
+  {
+    "case_id": "case_0083",
+    "routed_to_llm": true,
+    "final_action": "prompt_alt_payment",
+    "llm_output": {
+      "case_id": "case_0083",
+      "tree_model_score": 0.5045204861641334,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.6118624863978785
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": -0.19105797446900233
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        }
+      ],
+      "recommended_action": "prompt_alt_payment",
+      "action_scheduled_for": null,
+      "confidence": 0.75,
+      "reasoning_summary": "The top features influencing this decision were historical_ptp_honor_rate with a NEGATIVE shap_value (-0.61), indicating a low honor rate which pushes against recovery. However, ltv_tier with a POSITIVE shap_value (0.28) and issuer_bank_risk_tier with a POSITIVE shap_value (0.27) both push towards recovery. Customer_tenure_days has a NEGATIVE shap_value (-0.19), which slightly pushes against recovery. Payment_rail has a POSITIVE shap_value (0.12), also pushing towards recovery. The overall score is borderline and the negative shap_value for historical_ptp_honor_rate is strong. Given the mixed signals and the low historical_ptp_honor_rate despite other positive indicators, prompting an alternative payment method is the most appropriate action.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:44.730640+00:00"
+    }
+  },
+  {
+    "case_id": "case_0090",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0090",
+      "tree_model_score": 0.34995696444535296,
+      "tree_model_top_features": [
+        {
+          "feature": "prior_retry_success_count",
+          "shap_value": -0.5597906365383629
+        },
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.37674142362426516
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": 0.21919438607451347
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.7,
+      "reasoning_summary": "The SHAP top features indicate that prior_retry_success_count, with a NEGATIVE shap_value of -0.5598, pushed the case towards non-recovery. However, historical_ptp_honor_rate, with a POSITIVE shap_value of 0.3767, and issuer_bank_risk_tier, with a POSITIVE shap_value of 0.2656, pushed the case towards recovery. Day_of_week also had a POSITIVE shap_value of 0.2192, further supporting recovery. The LTV tier had a NEGATIVE shap_value of -0.2012, pushing away from recovery. Despite the negative influence of prior retry success count and LTV tier, the positive drivers, particularly the historical_ptp_honor_rate, suggest a retry is warranted. The case_facts indicate this is the 4th retry attempt.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:46.177733+00:00"
+    }
+  },
+  {
+    "case_id": "case_0091",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0091",
+      "tree_model_score": 0.40450502420238194,
+      "tree_model_top_features": [
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "time_of_day_bucket",
+          "shap_value": -0.12883244889996573
+        },
+        {
+          "feature": "amount",
+          "shap_value": -0.12565050920328663
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.8,
+      "reasoning_summary": "The top features driving the decision are decline_code_bucket with a POSITIVE shap_value, indicating a favorable signal for recovery. However, ltv_tier has a NEGATIVE shap_value, suggesting a less favorable recovery outlook. The time_of_day_bucket and amount also have NEGATIVE shap_values, further pushing towards non-recovery. The payment_rail has a POSITIVE shap_value, which is a mild positive signal. Given the strong POSITIVE signal from decline_code_bucket, and the other features being moderately negative, a retry now is recommended.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:47.548014+00:00"
+    }
+  },
+  {
+    "case_id": "case_0099",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0099",
+      "tree_model_score": 0.4654546987690442,
+      "tree_model_top_features": [
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.25847687587349405
+        },
+        {
+          "feature": "day_of_week",
+          "shap_value": -0.1750338202098383
+        },
+        {
+          "feature": "amount",
+          "shap_value": 0.13797960152166455
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.7,
+      "reasoning_summary": "The SHAP top features for this case are: decline_code_bucket, ltv_tier, issuer_bank_risk_tier, day_of_week, amount. The positive shap_value for decline_code_bucket (0.397) suggests that the 'CLEAR_SOFT' bucket is favorable for recovery. A positive shap_value for ltv_tier (0.279) also indicates a favorable propensity for recovery. The negative shap_value for issuer_bank_risk_tier (-0.258) indicates that a 'high_risk' issuer bank tier is unfavorable for recovery. A negative shap_value for day_of_week (-0.175) suggests that a Thursday is unfavorable for recovery. A positive shap_value for amount (0.137) suggests that this particular amount is favorable for recovery. Considering the combined positive signals from the decline code bucket, LTV tier, and amount, and despite the negative signals from issuer bank risk tier and day of week, a retry now is recommended.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:49.062833+00:00"
+    }
+  },
+  {
+    "case_id": "case_0100",
+    "routed_to_llm": true,
+    "final_action": "retry_scheduled",
+    "llm_output": {
+      "case_id": "case_0100",
+      "tree_model_score": 0.5943250931605613,
+      "tree_model_top_features": [
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.6349199283172428
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "retry_attempt_number",
+          "shap_value": -0.25870134593777805
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        },
+        {
+          "feature": "prior_retry_success_count",
+          "shap_value": 0.1034309920825466
+        }
+      ],
+      "recommended_action": "retry_scheduled",
+      "action_scheduled_for": "2024-07-08T18:00:00Z",
+      "confidence": 0.7,
+      "reasoning_summary": "The top features driving the recommendation are: a POSITIVE shap_value for `historical_ptp_honor_rate` (0.635), indicating a strong history of on-time payments; a POSITIVE shap_value for `ltv_tier` (0.280), suggesting the customer is valuable; and a POSITIVE shap_value for `prior_retry_success_count` (0.103), which is favorable. These positive indicators are partially offset by a NEGATIVE shap_value for `retry_attempt_number` (-0.259), as this is the fifth attempt, and a NEGATIVE shap_value for `issuer_bank_risk_tier` (-0.120), although the actual risk tier is low. The `guardrail_flags` field, not attributed by SHAP, notes that the `npci_retry_cap_reached` guardrail is active. Given the strong positive SHAP features outweighing the negative ones, and the presence of a guardrail that suggests a retry is appropriate after a pause, a scheduled retry is recommended.",
+      "guardrail_flags": [
+        "npci_retry_cap_reached"
+      ],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:50.902969+00:00"
+    }
+  },
+  {
+    "case_id": "case_0103",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0103",
+      "tree_model_score": 0.4646555223360939,
+      "tree_model_top_features": [
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": 0.2655573382885513
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": -0.21080517995701561
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": 0.15832169751163994
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.7,
+      "reasoning_summary": "The top features influencing this decision were: decline_code_bucket with a POSITIVE shap_value, indicating it pushed towards recovery; issuer_bank_risk_tier with a POSITIVE shap_value, also pushing towards recovery; customer_tenure_days with a NEGATIVE shap_value, pushing away from recovery; ltv_tier with a NEGATIVE shap_value, pushing away from recovery; and historical_ptp_honor_rate with a POSITIVE shap_value, pushing towards recovery. The net effect of these features suggests a retry is warranted.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:52.148339+00:00"
+    }
+  },
+  {
+    "case_id": "case_0108",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0108",
+      "tree_model_score": 0.45054641715627614,
+      "tree_model_top_features": [
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "customer_tenure_days",
+          "shap_value": -0.21949395037174146
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.20123535105966833
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        },
+        {
+          "feature": "amount",
+          "shap_value": 0.12073357003396941
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.75,
+      "reasoning_summary": "The top features influencing this decision were decline_code_bucket with a POSITIVE shap_value of 0.397, indicating a favorable soft decline. The customer_tenure_days had a NEGATIVE shap_value of -0.219, and ltv_tier had a NEGATIVE shap_value of -0.201, both pushing towards non-recovery. However, payment_rail contributed a POSITIVE shap_value of 0.122, and amount contributed a POSITIVE shap_value of 0.120, both pushing towards recovery. Given the strong positive signal from the decline code bucket and the positive contributions from payment_rail and amount, a retry is recommended. The fact that this is the second retry attempt is unranked context, not a SHAP-attributed driver.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:53.576117+00:00"
+    }
+  },
+  {
+    "case_id": "case_0109",
+    "routed_to_llm": true,
+    "final_action": "retry_scheduled",
+    "llm_output": {
+      "case_id": "case_0109",
+      "tree_model_score": 0.31976675357670126,
+      "tree_model_top_features": [
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "retry_attempt_number",
+          "shap_value": -0.25870134593777805
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.25847687587349405
+        },
+        {
+          "feature": "amount",
+          "shap_value": 0.17290862487103767
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": -0.14636252025225663
+        }
+      ],
+      "recommended_action": "retry_scheduled",
+      "action_scheduled_for": "2023-10-27T14:10:00Z",
+      "confidence": 0.6,
+      "reasoning_summary": "The SHAP features provided are: ltv_tier, retry_attempt_number, issuer_bank_risk_tier, amount, and payment_rail. The positive shap_value for ltv_tier (0.2798) suggests a potential for recovery. However, the negative shap_value for retry_attempt_number (-0.2587) indicates that this is a later attempt, which is unfavorable. The negative shap_value for issuer_bank_risk_tier (-0.2585) suggests that a high-risk issuer bank tier is pushing against recovery. The positive shap_value for amount (0.1729) is slightly favorable. The negative shap_value for payment_rail (-0.1464) indicates that the payment rail is unfavorable. Given the conflicting signals, particularly the late retry attempt and high-risk issuer, but also a positive LTV tier, a scheduled retry is the most appropriate action, with moderate confidence.",
+      "guardrail_flags": [],
+      "requires_human_review": true,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:55.213778+00:00"
+    }
+  },
+  {
+    "case_id": "case_0115",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0115",
+      "tree_model_score": 0.4261118170734135,
+      "tree_model_top_features": [
+        {
+          "feature": "decline_code_bucket",
+          "shap_value": 0.3970062137823236
+        },
+        {
+          "feature": "amount",
+          "shap_value": -0.3865794103436166
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": 0.27984421786915337
+        },
+        {
+          "feature": "historical_ptp_honor_rate",
+          "shap_value": -0.2727397614332939
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.65,
+      "reasoning_summary": "The top SHAP features for this case are: decline_code_bucket, amount, ltv_tier, historical_ptp_honor_rate, and issuer_bank_risk_tier. A POSITIVE shap_value for decline_code_bucket (0.397) and ltv_tier (0.280) pushed towards recovery. However, a NEGATIVE shap_value for amount (-0.387) and historical_ptp_honor_rate (-0.273) pushed against recovery. The issuer_bank_risk_tier had a NEGATIVE shap_value (-0.120), also pushing against recovery. The overall score and the combination of strong positive and negative drivers make this an ambiguous case. Given the positive driver from 'decline_code_bucket' which is bucketed as 'CLEAR_SOFT' and a 'medium' ltv_tier, retry_now is a reasonable action. The negative impact of 'amount' and 'historical_ptp_honor_rate' suggests potential risk, and the 'issuer_bank_risk_tier' being 'low_risk' is not a strong recovery signal here. Confidence is moderate due to conflicting signals.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:57.289130+00:00"
+    }
+  },
+  {
+    "case_id": "case_0119",
+    "routed_to_llm": true,
+    "final_action": "retry_now",
+    "llm_output": {
+      "case_id": "case_0119",
+      "tree_model_score": 0.4263851738300443,
+      "tree_model_top_features": [
+        {
+          "feature": "day_of_week",
+          "shap_value": -0.1750338202098383
+        },
+        {
+          "feature": "ltv_tier",
+          "shap_value": -0.12749525137163875
+        },
+        {
+          "feature": "payment_rail",
+          "shap_value": 0.12216766515157171
+        },
+        {
+          "feature": "issuer_bank_risk_tier",
+          "shap_value": -0.11957637862912443
+        },
+        {
+          "feature": "prior_retry_success_count",
+          "shap_value": 0.1034309920825466
+        }
+      ],
+      "recommended_action": "retry_now",
+      "action_scheduled_for": null,
+      "confidence": 0.7,
+      "reasoning_summary": "The model was given the following SHAP features: day_of_week, ltv_tier, payment_rail, issuer_bank_risk_tier, prior_retry_success_count. A NEGATIVE shap_value for day_of_week (-0.175) and ltv_tier (-0.127) pushed the case toward non-recovery. A POSITIVE shap_value for payment_rail (0.122) and prior_retry_success_count (0.103) pushed the case toward recovery. A NEGATIVE shap_value for issuer_bank_risk_tier (-0.119) pushed the case toward non-recovery. The POSITIVE impact of payment_rail and prior_retry_success_count slightly outweighs the NEGATIVE impact of day_of_week, ltv_tier, and issuer_bank_risk_tier, indicating a potential for recovery. The case is a retry attempt number 1.",
+      "guardrail_flags": [],
+      "requires_human_review": false,
+      "model_version": "gemini:gemini-2.5-flash-lite",
+      "timestamp": "2026-08-26T06:03:59.142284+00:00"
+    }
+  }
+]

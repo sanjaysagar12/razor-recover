@@ -1,0 +1,176 @@
+[
+  {
+    "case_id": "case_0000",
+    "tree_model_score": 0.460502485416429,
+    "tree_model_top_features": [
+      {
+        "feature": "ltv_tier",
+        "shap_value": 0.27984421786915337
+      },
+      {
+        "feature": "historical_ptp_honor_rate",
+        "shap_value": -0.23139584086137474
+      },
+      {
+        "feature": "customer_tenure_days",
+        "shap_value": 0.23021574260861416
+      },
+      {
+        "feature": "payment_rail",
+        "shap_value": -0.14636252025225663
+      },
+      {
+        "feature": "issuer_bank_risk_tier",
+        "shap_value": -0.11957637862912443
+      }
+    ],
+    "recommended_action": "retry_now",
+    "action_scheduled_for": null,
+    "confidence": 0.85,
+    "reasoning_summary": "The case has an ambiguous decline code ('05_do_not_honor' with bucket 'AMBIGUOUS'). The `ltv_tier` and `customer_tenure_days` have positive SHAP values, indicating positive influences. However, the `historical_ptp_honor_rate` has a negative SHAP value, suggesting a lower propensity for honoring payments. The `payment_rail` (emandate) and `issuer_bank_risk_tier` (low_risk) also have negative SHAP values, which are less concerning in this context. Given the mix of positive and negative indicators and the presence of an ambiguous decline, a retry is warranted. The `hours_since_last_attempt` (6.78) is not excessively long, and the `retry_attempt_number` is only 2, suggesting it's not a persistent failure. Therefore, retrying now seems appropriate.",
+    "guardrail_flags": [],
+    "requires_human_review": false,
+    "model_version": "gemini:gemini-2.5-flash-lite",
+    "timestamp": "2026-08-26T05:46:25.075281+00:00"
+  },
+  {
+    "case_id": "case_0001",
+    "tree_model_score": 0.44782182231893175,
+    "tree_model_top_features": [
+      {
+        "feature": "historical_ptp_honor_rate",
+        "shap_value": 0.28606168341370797
+      },
+      {
+        "feature": "ltv_tier",
+        "shap_value": -0.20123535105966833
+      },
+      {
+        "feature": "payment_rail",
+        "shap_value": -0.14636252025225663
+      },
+      {
+        "feature": "customer_tenure_days",
+        "shap_value": -0.1383987598343003
+      },
+      {
+        "feature": "issuer_bank_risk_tier",
+        "shap_value": -0.11957637862912443
+      }
+    ],
+    "recommended_action": "retry_now",
+    "action_scheduled_for": null,
+    "confidence": 0.7,
+    "reasoning_summary": "The historical PTP honor rate has a positive SHAP value (0.286), indicating a favorable factor for recovery. While the LTV tier (low) and payment rail (emandate) have negative SHAP values (-0.201 and -0.146 respectively), and customer tenure and issuer bank risk also have negative SHAP values, the positive impact of the honor rate suggests a retry might be successful. The decline code is 'issuer_unavailable' and the bucket is 'AMBIGUOUS', which, combined with the positive SHAP value for honor rate, justifies an immediate retry. The retry attempt number is 1, and hours since last attempt (56.04) are sufficient.",
+    "guardrail_flags": [],
+    "requires_human_review": false,
+    "model_version": "gemini:gemini-2.5-flash-lite",
+    "timestamp": "2026-08-26T05:46:26.554273+00:00"
+  },
+  {
+    "case_id": "case_0005",
+    "tree_model_score": 0.4887452180446278,
+    "tree_model_top_features": [
+      {
+        "feature": "prior_retry_success_count",
+        "shap_value": -0.33871676033139303
+      },
+      {
+        "feature": "ltv_tier",
+        "shap_value": 0.27984421786915337
+      },
+      {
+        "feature": "issuer_bank_risk_tier",
+        "shap_value": 0.2655573382885513
+      },
+      {
+        "feature": "retry_attempt_number",
+        "shap_value": -0.17057923296627214
+      },
+      {
+        "feature": "customer_tenure_days",
+        "shap_value": 0.1391153012905796
+      }
+    ],
+    "recommended_action": "escalate_human",
+    "action_scheduled_for": null,
+    "confidence": 0.4,
+    "reasoning_summary": "The model's top negative feature is prior_retry_success_count, indicating previous retries were not successful. Additionally, the retry_attempt_number is 4, which is a moderate number of attempts. The guardrail flag 'npci_retry_cap_reached' also suggests that further retries might be futile or capped. While ltv_tier and issuer_bank_risk_tier have positive shap values, the cumulative negative indicators and the retry cap suggest that escalating for human review is the safest action to avoid unnecessary retries and potential customer friction.",
+    "guardrail_flags": [
+      "npci_retry_cap_reached"
+    ],
+    "requires_human_review": true,
+    "model_version": "gemini:gemini-2.5-flash-lite",
+    "timestamp": "2026-08-26T05:46:27.880703+00:00"
+  },
+  {
+    "case_id": "case_0007",
+    "tree_model_score": 0.48807043019634855,
+    "tree_model_top_features": [
+      {
+        "feature": "ltv_tier",
+        "shap_value": -0.20123535105966833
+      },
+      {
+        "feature": "amount",
+        "shap_value": 0.1295085288169519
+      },
+      {
+        "feature": "payment_rail",
+        "shap_value": 0.12216766515157171
+      },
+      {
+        "feature": "hours_since_last_attempt",
+        "shap_value": 0.12023979499551157
+      },
+      {
+        "feature": "issuer_bank_risk_tier",
+        "shap_value": -0.11957637862912443
+      }
+    ],
+    "recommended_action": "retry_now",
+    "action_scheduled_for": null,
+    "confidence": 0.7,
+    "reasoning_summary": "The customer has a low LTV tier and a low issuer bank risk tier, which are generally positive indicators. Although the amount is higher than the historical average, the strong positive shap value for amount and payment rail, combined with a reasonable number of hours since the last attempt, suggests a retry now might be successful. The decline code is ambiguous, but the other factors lean towards a retry.",
+    "guardrail_flags": [],
+    "requires_human_review": false,
+    "model_version": "gemini:gemini-2.5-flash-lite",
+    "timestamp": "2026-08-26T05:46:29.192645+00:00"
+  },
+  {
+    "case_id": "case_0011",
+    "tree_model_score": 0.44355386162708954,
+    "tree_model_top_features": [
+      {
+        "feature": "decline_code_bucket",
+        "shap_value": 0.3970062137823236
+      },
+      {
+        "feature": "payment_rail",
+        "shap_value": -0.14636252025225663
+      },
+      {
+        "feature": "ltv_tier",
+        "shap_value": -0.12749525137163875
+      },
+      {
+        "feature": "issuer_bank_risk_tier",
+        "shap_value": -0.11957637862912443
+      },
+      {
+        "feature": "prior_retry_success_count",
+        "shap_value": 0.1034309920825466
+      }
+    ],
+    "recommended_action": "retry_now",
+    "action_scheduled_for": null,
+    "confidence": 0.75,
+    "reasoning_summary": "The `decline_code_bucket` is `CLEAR_SOFT`, which is generally recoverable. The `payment_rail` is `emandate` and the `ltv_tier` is `high`. The `prior_retry_success_count` is 0, and the `issuer_bank_risk_tier` is `low_risk`. The `amount_vs_historical_avg` is high (1.65), and the `guardrail_flags` indicate an `anomalous_amount`. The `historical_ptp_honor_rate` is moderate (0.51). Given the soft decline, low issuer risk, and a decent PTP rate, a retry now seems appropriate, though the anomalous amount and high retry amount warrant some caution.",
+    "guardrail_flags": [
+      "anomalous_amount"
+    ],
+    "requires_human_review": false,
+    "model_version": "gemini:gemini-2.5-flash-lite",
+    "timestamp": "2026-08-26T05:46:30.780827+00:00"
+  }
+]

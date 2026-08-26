@@ -284,6 +284,23 @@ def get_shap_top_features(row_id: str) -> list[dict]:
     return _top_features_for_row(ctx, ctx.case_id_to_row[row_id])
 
 
+def get_case_facts(row_id: str) -> dict:
+    """Raw case facts for row_id, for the Phase 5 LLM prompt -- the model's
+    feature columns plus case_id/decline_code/guardrail_flags. Deliberately
+    excludes 'outcome' (the historical target label) so the prompt never
+    leaks the answer for what was, at scoring time, an unresolved case."""
+    ctx = _get_context()
+    if row_id not in ctx.case_id_to_row:
+        raise KeyError(f"Unknown case_id: {row_id!r}")
+    row = ctx.df.iloc[ctx.case_id_to_row[row_id]]
+    fact_cols = ["case_id", "decline_code", "guardrail_flags"] + ctx.feature_columns
+    facts = {}
+    for col in fact_cols:
+        value = row[col]
+        facts[col] = None if pd.isna(value) else _to_jsonable(value)
+    return facts
+
+
 def get_tree_model_score(row_id: str) -> float:
     ctx = _get_context()
     if row_id not in ctx.case_id_to_row:
