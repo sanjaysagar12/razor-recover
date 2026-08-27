@@ -37,8 +37,15 @@ percentile cutoffs used for every other, non-ambiguous case.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import numpy as np
 import pandas as pd
+
+from guardrails import HARD_DECLINE_CODES, NO_RETRY_ACTION
 
 # Probability band, expressed as PERCENTILES of this batch's own score
 # distribution (not fixed probability cutoffs -- see module docstring for
@@ -70,6 +77,35 @@ def _in_probability_band(tree_probability: float, band_low: float, band_high: fl
     return band_low <= tree_probability <= band_high
 
 
+def _is_hard_decline(decline_code: str) -> bool:
+    return decline_code in HARD_DECLINE_CODES
+
+
+def _template_action(tree_probability: float, decline_code: str, band_high: float) -> str:
+    """Template action for a case NOT routed to the LLM (see route_case).
+
+    Branches on decline_code type as well as score:
+      * A hard decline never gets a retry default regardless of score --
+        guardrails.py's hard_decline_excluded rule would also catch this
+        downstream, but the template shouldn't rely on guardrails to
+        correct an obviously wrong default (see guardrails.HARD_DECLINE_CODES,
+        the same "CLEAR_HARD" bucket used there).
+      * band_low/band_high is a RELATIVE percentile slice of this batch's
+        own (compressed) score distribution, not an absolute floor -- a
+        non-hard decline scoring below it is not necessarily hopeless, so
+        it gets a lower-urgency retry_scheduled instead of being written
+        off outright (BEFORE this fix: any non-ambiguous-code case below
+        band_high, hard or not, was written off as no_retry_prompt_update
+        purely from score -- see PHASE7_REPORT.md for the leaked-revenue
+        this caused on soft-decline codes with a below-band score).
+    """
+    if _is_hard_decline(decline_code):
+        return NO_RETRY_ACTION
+    if tree_probability > band_high:
+        return "retry_now"
+    return "retry_scheduled"
+
+
 def compute_probability_band(scores_df: pd.DataFrame) -> tuple[float, float]:
     """Percentile band fit on the scores of rows NOT already flagged by the
     ambiguous_code trigger, so that cluster doesn't skew the cutoffs used
@@ -93,12 +129,7 @@ def route_case(case_id: str, tree_probability: float, decline_code: str, band_lo
 
     routed_to_llm = len(routing_trigger) > 0
 
-    if routed_to_llm:
-        template_action = None
-    elif tree_probability > band_high:
-        template_action = "retry_now"
-    else:
-        template_action = "no_retry_prompt_update"
+    template_action = None if routed_to_llm else _template_action(tree_probability, decline_code, band_high)
 
     return {
         "case_id": case_id,
