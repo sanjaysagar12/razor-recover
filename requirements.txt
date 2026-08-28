@@ -7,3 +7,4 @@ shap
 anthropic
 pydantic
 google-genai
+flask

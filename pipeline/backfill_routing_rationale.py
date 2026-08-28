@@ -87,6 +87,7 @@ def main() -> int:
                 record["routing_trigger"],
                 record["routed_to_llm"],
                 record["template_action"],
+                record["ambiguous_code_flag"],
             )
         )
 

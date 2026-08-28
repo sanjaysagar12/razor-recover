@@ -315,6 +315,70 @@ def get_tree_model_score(row_id: str) -> float:
     return float(ctx.predicted_proba[ctx.case_id_to_row[row_id]])
 
 
+_live_pipeline_cache: tuple | None = None
+
+
+def _get_live_pipeline():
+    """Lazily-cached (preprocessor, clf) pair, loaded once from the same
+    artifact as _ShapContext. Kept separate from _ShapContext (rather than
+    stashing these on it) so score_new_case below never has to touch that
+    class's internals."""
+    global _live_pipeline_cache
+    if _live_pipeline_cache is None:
+        meta = load_metadata()
+        pipeline, _primary_key = load_primary_pipeline(meta)
+        _live_pipeline_cache = (pipeline.named_steps["preprocess"], pipeline.named_steps["clf"])
+    return _live_pipeline_cache
+
+
+def score_new_case(case_facts: dict) -> dict:
+    """Score a case that is NOT part of the loaded train/holdout batch --
+    e.g. a live Razorpay webhook case -- against the same primary-model
+    pipeline and SHAP explainer used for the batch above.
+
+    Added for webhook_receiver.py: every other function in this module keys
+    off a case_id already present in data/train.csv + data/holdout.csv
+    (get_shap_top_features / get_case_facts / get_tree_model_score), which a
+    real-time webhook case never is. This reuses the same cached explainer
+    and background data (_get_context()) rather than re-fitting per request,
+    so live scoring stays consistent with the batch's own SHAP baseline.
+
+    case_facts must contain every key in the model's feature_columns
+    (numeric + categorical, from model_metadata.json) -- see
+    webhook_receiver.map_payload_to_case for how a Razorpay webhook payload
+    is mapped into that shape. Missing keys transform as NaN/None, same as
+    an unmapped category would in the training pipeline.
+
+    Returns {"tree_model_score": float, "shap_top_features": [...]}, the
+    same shapes get_tree_model_score / get_shap_top_features return.
+    """
+    ctx = _get_context()
+    preprocessor, clf = _get_live_pipeline()
+
+    row_df = pd.DataFrame([{col: case_facts.get(col) for col in ctx.feature_columns}])
+    Xt_row = preprocessor.transform(row_df)
+    if hasattr(Xt_row, "toarray"):
+        Xt_row = Xt_row.toarray()
+    Xt_row = np.asarray(Xt_row, dtype=float)
+
+    tree_model_score = float(clf.predict_proba(Xt_row)[:, 1][0])
+
+    shap_row = np.asarray(ctx.explainer.shap_values(Xt_row), dtype=float)
+    if shap_row.ndim == 2:
+        shap_row = shap_row[0]
+
+    agg: dict[str, float] = {}
+    for transformed_idx, original_col in enumerate(ctx.column_mapping):
+        agg[original_col] = agg.get(original_col, 0.0) + float(shap_row[transformed_idx])
+    ranked = sorted(agg.items(), key=lambda kv: abs(kv[1]), reverse=True)[:TOP_K_FEATURES]
+    shap_top_features = [
+        {"feature": feature, "value": _to_jsonable(case_facts.get(feature)), "shap_value": shap_val}
+        for feature, shap_val in ranked
+    ]
+
+    return {"tree_model_score": tree_model_score, "shap_top_features": shap_top_features}
+
+
 def get_scores_df() -> pd.DataFrame:
     """case_id, tree_model_score, decline_code (raw, un-bucketed) for every
     case -- the tree_model_score is exactly what SHAP explained above, so

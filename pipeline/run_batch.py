@@ -139,19 +139,28 @@ def _routing_rationale(
     routing_trigger: list[str],
     routed_to_llm: bool,
     template_action: Optional[str],
+    ambiguous_code_flag: bool,
 ) -> str:
     """Human-readable explanation of confidence_gate.route_case()'s routing
-    decision for one case. Built ONLY from that function's own inputs
-    (band_low/band_high, routing_trigger) plus its own private helpers
-    (_in_probability_band, _decline_code_prefix, _is_ambiguous_code),
-    reused here read-only -- never reimplemented -- so this string can never
-    drift from what confidence_gate.py actually decided for this case."""
+    decision for one case. band_low/band_high feed _in_probability_band
+    (a pure function of the band -- safe to recompute, can't drift).
+    ambiguous_code_flag is NOT recomputed here -- it's read straight from
+    route_case()'s own return value (record["ambiguous_code_flag"]),
+    because route_case can be told the real ambiguous-code answer by a
+    caller (e.g. webhook_receiver.py, via decline_code_mapper) that
+    overrides the legacy prefix-match confidence_gate._is_ambiguous_code
+    would otherwise give. Recomputing it independently here (the previous
+    version of this function did, via confidence_gate._is_ambiguous_code)
+    silently ignores that override and can render an explanation that
+    contradicts the actual routing decision -- see PHASE7_REPORT.md-era bug:
+    a real case routed via ambiguous_code_flag=True from decline_code_mapper
+    still printed 'ambiguous_code=False' in this string, because the prefix
+    match on a real Razorpay error_reason like 'generic_decline' never
+    matches confidence_gate.AMBIGUOUS_DECLINE_CODES' synthetic prefixes."""
     in_band = confidence_gate._in_probability_band(tree_score, band_low, band_high)
-    prefix = confidence_gate._decline_code_prefix(decline_code)
-    is_ambiguous = confidence_gate._is_ambiguous_code(decline_code)
 
     band_clause = f"score={tree_score:.4f} vs band=[{band_low:.4f}, {band_high:.4f}] (in_band={in_band})"
-    code_clause = f"decline_code={decline_code!r} prefix={prefix!r} (ambiguous_code={is_ambiguous})"
+    code_clause = f"decline_code={decline_code!r} (is_ambiguous={ambiguous_code_flag})"
 
     if routed_to_llm:
         trigger_str = "+".join(routing_trigger) if routing_trigger else "unknown"
@@ -243,6 +252,7 @@ def build_audit_row(
         record["routing_trigger"],
         routed_to_llm,
         record["template_action"],
+        record["ambiguous_code_flag"],
     )
 
     if routed_to_llm:
@@ -305,6 +315,13 @@ def build_audit_row(
     return {
         "case_id": case_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        # Not one of AUDIT_COLUMNS -- pd.DataFrame(rows, columns=AUDIT_COLUMNS)
+        # in run_batch() below silently drops it, so logs/audit_log.csv is
+        # unaffected. Surfaced only for webhook_receiver.py's execute_action,
+        # which needs the proposal's scheduled time for retry_scheduled cases
+        # and has no other way to get it without duplicating this function's
+        # guardrail-call logic.
+        "action_scheduled_for": proposed.get("action_scheduled_for"),
         "decline_code": case_facts["decline_code"],
         "amount": case_facts["amount"],
         "tree_model_score": record["tree_model_score"],

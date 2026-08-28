@@ -120,11 +120,28 @@ def compute_probability_band(scores_df: pd.DataFrame) -> tuple[float, float]:
     return float(low), float(high)
 
 
-def route_case(case_id: str, tree_probability: float, decline_code: str, band_low: float, band_high: float) -> dict:
+def route_case(
+    case_id: str,
+    tree_probability: float,
+    decline_code: str,
+    band_low: float,
+    band_high: float,
+    is_ambiguous: bool | None = None,
+) -> dict:
+    """is_ambiguous: override for the ambiguous_code trigger, supplied by a
+    caller that has a better source of truth than the synthetic-taxonomy
+    prefix match below -- e.g. webhook_receiver.py passes
+    pipeline.decline_code_mapper's bucket-based is_ambiguous for real
+    Razorpay decline codes, which never match AMBIGUOUS_DECLINE_CODES'
+    synthetic prefixes ("05", ...) in the first place. None (the default)
+    preserves the original prefix-match behavior exactly -- run_full_batch
+    below never passes this, so the synthetic batch simulation is
+    byte-for-byte unaffected by this parameter's existence."""
     routing_trigger: list[str] = []
     if _in_probability_band(tree_probability, band_low, band_high):
         routing_trigger.append("probability_band")
-    if _is_ambiguous_code(decline_code):
+    ambiguous_code_flag = is_ambiguous if is_ambiguous is not None else _is_ambiguous_code(decline_code)
+    if ambiguous_code_flag:
         routing_trigger.append("ambiguous_code")
 
     routed_to_llm = len(routing_trigger) > 0
@@ -136,6 +153,13 @@ def route_case(case_id: str, tree_probability: float, decline_code: str, band_lo
         "tree_model_score": float(tree_probability),
         "routed_to_llm": routed_to_llm,
         "routing_trigger": routing_trigger,
+        # The actual boolean that decided whether "ambiguous_code" landed in
+        # routing_trigger above -- exposed explicitly so callers building a
+        # human-readable rationale (run_batch._routing_rationale) can read
+        # the real decision instead of recomputing it via _is_ambiguous_code,
+        # which silently ignores the is_ambiguous override and reintroduces
+        # the legacy prefix-match result into the explanation text.
+        "ambiguous_code_flag": ambiguous_code_flag,
         "template_action": template_action,
     }
 
