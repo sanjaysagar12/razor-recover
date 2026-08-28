@@ -29,12 +29,13 @@ import json
 import logging
 import sys
 import time
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 BASE_DIR = Path(__file__).resolve().parent
 PIPELINE_DIR = BASE_DIR / "pipeline"
@@ -43,10 +44,7 @@ sys.path.insert(0, str(PIPELINE_DIR))
 import confidence_gate  # noqa: E402
 import customer_history  # noqa: E402
 import decline_code_mapper  # noqa: E402
-import execute_action  # noqa: E402
-import llm_layer  # noqa: E402
-import run_batch  # noqa: E402
-import shap_extract  # noqa: E402
+import run_case  # noqa: E402
 
 load_dotenv()
 
@@ -72,6 +70,40 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("webhook_receiver")
+
+# --------------------------------------------------------------------------
+# Task 1 -- webhook transport-layer log (separate from the pipeline-decision
+# log, logs/webhook_audit_log.csv). Captures EVERY POST to /webhook/razorpay,
+# including ones that never reach the pipeline at all: signature rejections,
+# malformed JSON, and unhandled event types. Those previously only showed up
+# in the free-text webhook_receiver.log, not in any structured, queryable
+# form -- this is that missing structured record.
+# --------------------------------------------------------------------------
+WEBHOOK_LOG_PATH = LOGS_DIR / "webhook_log.csv"
+WEBHOOK_LOG_COLUMNS = ["timestamp", "event_type", "signature_valid", "case_id", "outcome", "error_detail"]
+
+OUTCOME_PROCESSED = "processed"
+OUTCOME_IGNORED = "ignored"
+OUTCOME_SIGNATURE_REJECTED = "signature_rejected"
+OUTCOME_ERROR = "error"
+
+
+def _append_webhook_log(
+    event_type: str | None, signature_valid: bool, case_id: str | None, outcome: str, error_detail: str | None = None
+) -> None:
+    WEBHOOK_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event_type": event_type,
+        "signature_valid": signature_valid,
+        "case_id": case_id,
+        "outcome": outcome,
+        "error_detail": error_detail,
+    }
+    df = pd.DataFrame([row], columns=WEBHOOK_LOG_COLUMNS)
+    write_header = not WEBHOOK_LOG_PATH.exists()
+    df.to_csv(WEBHOOK_LOG_PATH, mode="a", header=write_header, index=False)
+
 
 # --------------------------------------------------------------------------
 # Event routing
@@ -319,215 +351,27 @@ def map_payload_to_case(event: dict) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Pipeline orchestration
+# Pipeline orchestration -- thin wrappers around pipeline/run_case.py, which
+# holds the actual confidence_gate -> shap_extract -> llm_layer -> guardrails
+# -> execute_action flow (and its own step-by-step logging). Both of these
+# just build the case-shaped dict from a raw webhook event and hand it off;
+# /api/trigger-test-case below calls run_case directly with an
+# operator-supplied case dict instead of one built from a webhook payload --
+# same pipeline functions either way, never duplicated.
 # --------------------------------------------------------------------------
-_band_cache: tuple[float, float] | None = None
-
-
-def _get_probability_band() -> tuple[float, float]:
-    """Confidence-gate's probability band, fit once against the historical
-    batch (data/train.csv + data/holdout.csv, via shap_extract.get_scores_df)
-    and cached for the life of the process. Live webhook cases are routed
-    against this fixed reference band rather than refitting per-request --
-    a single new case has no distribution of its own to compute percentiles
-    over."""
-    global _band_cache
-    if _band_cache is None:
-        scores_df = shap_extract.get_scores_df()
-        _band_cache = confidence_gate.compute_probability_band(scores_df)
-        logger.info("Confidence-gate probability band fit: low=%.4f high=%.4f", *_band_cache)
-    return _band_cache
-
-
-# First 25 columns identical, in the same order, to run_batch.AUDIT_COLUMNS
-# (logs/audit_log.csv's schema) -- new columns are appended after, never
-# inserted/reordered, so nothing reading the first 25 by name breaks.
-WEBHOOK_AUDIT_COLUMNS = run_batch.AUDIT_COLUMNS + [
-    "decline_code_bucket",
-    "decline_code_is_ambiguous",
-    "customer_key",
-    "customer_history_source",
-    "execution_status",
-    "execution_mechanism",
-    "execution_detail",
-    "execution_timestamp",
-]
-
-WEBHOOK_AUDIT_LOG_PATH = LOGS_DIR / "webhook_audit_log.csv"
-
-
-def _append_webhook_audit_row(row: dict) -> None:
-    WEBHOOK_AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame([row], columns=WEBHOOK_AUDIT_COLUMNS)
-    write_header = not WEBHOOK_AUDIT_LOG_PATH.exists()
-    df.to_csv(WEBHOOK_AUDIT_LOG_PATH, mode="a", header=write_header, index=False)
-
-
-def _blank_webhook_audit_row() -> dict:
-    return {col: None for col in WEBHOOK_AUDIT_COLUMNS}
-
-
 def process_recovery_case(event: dict, event_type: str) -> dict:
-    """payment.failed / subscription.pending / subscription.halted -- runs
-    the full pipeline (confidence_gate -> shap_extract -> conditionally
-    llm_layer -> guardrails -> execute_action) and appends the resulting row
-    to logs/webhook_audit_log.csv.
-
-    execute_action's result is a fact separate from the guardrail decision
-    (execution_status/execution_mechanism/execution_detail/
-    execution_timestamp columns) -- a decision and its execution can
-    diverge, e.g. final_action=retry_now but the payment-link API call
-    fails, so they're never merged into one field.
-    """
-    logger.info("event=%s: step 1/7 -- mapping payload to case schema", event_type)
     case_facts = map_payload_to_case(event)
-    case_id = case_facts["case_id"]
-    customer_key = case_facts["customer_key"]
-    logger.info(
-        "case_id=%s: mapped -- amount=%.2f decline_code=%s decline_code_bucket=%s payment_rail=%s "
-        "retry_attempt_number=%s customer_key=%s customer_history_source=%s",
-        case_id, case_facts["amount"], case_facts["decline_code"], case_facts["decline_code_bucket"],
-        case_facts["payment_rail"], case_facts["retry_attempt_number"], customer_key,
-        case_facts["customer_history_source"],
-    )
-
-    logger.info("case_id=%s: step 2/7 -- scoring via shap_extract.score_new_case", case_id)
-    scoring = shap_extract.score_new_case(case_facts)
-    tree_model_score = scoring["tree_model_score"]
-    shap_top_features = scoring["shap_top_features"]
-    logger.info(
-        "case_id=%s: scored -- tree_model_score=%.4f top_shap_feature=%s",
-        case_id, tree_model_score, shap_top_features[0] if shap_top_features else None,
-    )
-
-    logger.info("case_id=%s: step 3/7 -- routing via confidence_gate.route_case", case_id)
-    band_low, band_high = _get_probability_band()
-    record = confidence_gate.route_case(
-        case_id, tree_model_score, case_facts["decline_code"], band_low, band_high,
-        is_ambiguous=case_facts["decline_code_is_ambiguous"],
-    )
-    logger.info(
-        "case_id=%s: routed -- routed_to_llm=%s routing_trigger=%s template_action=%s",
-        case_id, record["routed_to_llm"], record["routing_trigger"], record["template_action"],
-    )
-
-    meta = shap_extract.load_metadata()
-    tree_model_version = meta["models"][meta["primary_model_key"]]["version"]
-    if record["routed_to_llm"]:
-        logger.info(
-            "case_id=%s: step 4/7 -- routed to LLM layer, provider=%s",
-            case_id, os.environ.get("LLM_PROVIDER", "claude"),
-        )
-        adapter = llm_layer.get_llm_adapter()
-    else:
-        logger.info(
-            "case_id=%s: step 4/7 -- not routed to LLM, using template_action=%s",
-            case_id, record["template_action"],
-        )
-        adapter = None
-
-    logger.info("case_id=%s: step 5/7 -- applying guardrails and building audit row", case_id)
-    audit_row = run_batch.build_audit_row(
-        record, shap_top_features, case_facts, tree_model_version, adapter, band_low, band_high
-    )
-    logger.info(
-        "case_id=%s: guardrails applied -- proposed_action=%s final_action=%s guardrail_overrode=%s "
-        "guardrail_flags=%s requires_human_review=%s llm_schema_valid=%s",
-        case_id, audit_row["proposed_action"], audit_row["final_action"], audit_row["guardrail_overrode"],
-        audit_row["guardrail_flags"], audit_row["requires_human_review"], audit_row["llm_schema_valid"],
-    )
-
-    logger.info("case_id=%s: step 6/7 -- executing final_action=%s via execute_action", case_id, audit_row["final_action"])
-    execution_result = execute_action.execute_action(
-        case_facts, audit_row["final_action"], audit_row.get("action_scheduled_for")
-    )
-    logger.info(
-        "case_id=%s: execution complete -- status=%s mechanism=%s detail=%s",
-        case_id, execution_result["execution_status"], execution_result["execution_mechanism"],
-        execution_result["execution_detail"],
-    )
-
-    logger.info("case_id=%s: step 7/7 -- recording customer_history outcome (recovered=False)", case_id)
-    # This case's own outcome (a failure -- it's here because the payment
-    # failed) updates the customer's running honor rate for the NEXT case,
-    # after today's scoring already used the pre-event fields.
-    customer_history.record_payment_outcome(customer_key, recovered=False)
-
-    webhook_row = {col: audit_row.get(col) for col in run_batch.AUDIT_COLUMNS}
-    webhook_row.update(
-        {
-            "decline_code_bucket": case_facts["decline_code_bucket"],
-            "decline_code_is_ambiguous": case_facts["decline_code_is_ambiguous"],
-            "customer_key": customer_key,
-            "customer_history_source": case_facts["customer_history_source"],
-            "execution_status": execution_result["execution_status"],
-            "execution_mechanism": execution_result["execution_mechanism"],
-            "execution_detail": execution_result["execution_detail"],
-            "execution_timestamp": execution_result["execution_timestamp"],
-        }
-    )
-    _append_webhook_audit_row(webhook_row)
-    logger.info("case_id=%s: audit row appended to %s", case_id, WEBHOOK_AUDIT_LOG_PATH)
-
-    logger.info(
-        "case_id=%s event=%s DONE -- routed_to_llm=%s final_action=%s requires_human_review=%s "
-        "guardrail_flags=%s execution_status=%s execution_mechanism=%s",
-        case_id, event_type, record["routed_to_llm"], audit_row["final_action"],
-        audit_row["requires_human_review"], audit_row["guardrail_flags"],
-        execution_result["execution_status"], execution_result["execution_mechanism"],
-    )
-    return webhook_row
+    return run_case.run_recovery_case(case_facts, event_type, source=run_case.SOURCE_REAL_WEBHOOK)
 
 
 def process_recovered_case(event: dict, event_type: str) -> dict:
-    """subscription.charged -- payment recovered, no pipeline routing or
-    execution needed (the payment already succeeded). Logged as a
-    recovered-amount row in logs/webhook_audit_log.csv for recovered-amount
-    tracking, and updates the customer's history record."""
-    logger.info("event=%s: step 1/3 -- extracting recovered-payment facts", event_type)
     payment_entity, subscription_entity = _extract_entities(event)
     case_id = _extract_case_id(event)
     amount_paise = payment_entity.get("amount") or subscription_entity.get("amount") or 0
     amount = round(amount_paise / 100.0, 2)
     customer_id = payment_entity.get("customer_id") or subscription_entity.get("customer_id")
     customer_key = _customer_key(customer_id, subscription_entity.get("id"))
-    logger.info("case_id=%s: amount=%.2f customer_key=%s", case_id, amount, customer_key)
-
-    logger.info("case_id=%s: step 2/3 -- recording customer_history outcome (recovered=True)", case_id)
-    _unused_fields, is_first_seen = customer_history.get_or_create_customer(customer_key)
-    customer_history.record_payment_outcome(customer_key, recovered=True)
-
-    logger.info("case_id=%s: step 3/3 -- building and appending audit row (no pipeline routing/execution)", case_id)
-    row = _blank_webhook_audit_row()
-    row.update(
-        {
-            "case_id": case_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "amount": amount,
-            "routed_to_llm": False,
-            "guardrail_flags": "",
-            "proposed_action": "recovered",
-            "final_action": "recovered",
-            "guardrail_overrode": False,
-            "requires_human_review": False,
-            "pipeline_version": run_batch.PIPELINE_VERSION,
-            "routing_rationale": "subscription.charged webhook -- payment recovered, no pipeline routing needed",
-            "customer_key": customer_key,
-            "customer_history_source": "first_seen_defaults" if is_first_seen else "existing_history",
-            "execution_status": "not_applicable",
-            "execution_mechanism": "none",
-            "execution_detail": "final_action=recovered -- payment already succeeded, no action to execute.",
-            "execution_timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-    )
-    _append_webhook_audit_row(row)
-    logger.info("case_id=%s: audit row appended to %s", case_id, WEBHOOK_AUDIT_LOG_PATH)
-
-    logger.info(
-        "case_id=%s event=%s DONE -- RECOVERED amount=%.2f customer_key=%s",
-        case_id, event_type, amount, customer_key,
-    )
-    return row
+    return run_case.run_recovered_case(case_id, amount, customer_key, event_type, source=run_case.SOURCE_REAL_WEBHOOK)
 
 
 # --------------------------------------------------------------------------
@@ -582,6 +426,7 @@ def razorpay_webhook():
 
     if not verify_razorpay_signature(raw_body, signature, RAZORPAY_WEBHOOK_SECRET):
         logger.warning("Signature verification FAILED remote_addr=%s", request.remote_addr)
+        _append_webhook_log(None, False, None, OUTCOME_SIGNATURE_REJECTED)
         return jsonify({"status": "error", "message": "invalid signature"}), 400
 
     logger.info("Signature verification OK remote_addr=%s", request.remote_addr)
@@ -590,6 +435,7 @@ def razorpay_webhook():
         event = json.loads(raw_body.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.error("Body is not valid JSON after signature verification: %s", exc)
+        _append_webhook_log(None, True, None, OUTCOME_ERROR, f"invalid JSON: {exc}")
         return jsonify({"status": "error", "message": "invalid JSON"}), 400
 
     event_type = event.get("event", "unknown")
@@ -602,6 +448,7 @@ def razorpay_webhook():
         case_id = _extract_case_id(event)
         try:
             audit_row = process_recovery_case(event, event_type)
+            _append_webhook_log(event_type, True, audit_row["case_id"], OUTCOME_PROCESSED)
             return (
                 jsonify(
                     {
@@ -616,29 +463,13 @@ def razorpay_webhook():
                 ),
                 200,
             )
-        except Exception:
+        except Exception as exc:
             # A pipeline bug must never cause Razorpay to retry-storm us --
             # always ack 200, but flag the case for a human to look at.
             logger.exception("Pipeline error processing case_id=%s event=%s", case_id, event_type)
-            error_row = _blank_webhook_audit_row()
-            error_row.update(
-                {
-                    "case_id": case_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "routing_rationale": f"PIPELINE ERROR ({event_type})",
-                    "guardrail_flags": "",
-                    "proposed_action": "error",
-                    "final_action": "error_requires_human_review",
-                    "guardrail_overrode": False,
-                    "requires_human_review": True,
-                    "pipeline_version": run_batch.PIPELINE_VERSION,
-                    "execution_status": "not_applicable",
-                    "execution_mechanism": "none",
-                    "execution_detail": "Pipeline raised before a final_action was reached -- nothing to execute.",
-                    "execution_timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            _append_webhook_audit_row(error_row)
+            error_row = run_case.build_error_row(case_id, event_type, source=run_case.SOURCE_REAL_WEBHOOK)
+            run_case.append_webhook_audit_row(error_row)
+            _append_webhook_log(event_type, True, case_id, OUTCOME_ERROR, f"{type(exc).__name__}: {exc}")
             return (
                 jsonify(
                     {
@@ -654,10 +485,12 @@ def razorpay_webhook():
 
     elif event_type == RECOVERED_EVENT:
         row = process_recovered_case(event, event_type)
+        _append_webhook_log(event_type, True, row["case_id"], OUTCOME_PROCESSED)
         return jsonify({"status": "recovered", "case_id": row["case_id"], "event": event_type, "amount": row["amount"]}), 200
 
     else:
         logger.info("Event=%s -- no handler, acking as ignored", event_type)
+        _append_webhook_log(event_type, True, _extract_case_id(event), OUTCOME_IGNORED)
         return jsonify({"status": "ignored", "event": event_type}), 200
 
 
@@ -666,12 +499,244 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+# --------------------------------------------------------------------------
+# Task 3 -- crude in-memory rate limit for the trigger endpoint. Global (not
+# per-IP) and reset on process restart -- deliberately simple, this only
+# needs to stop the endpoint being hammered into generating unbounded audit
+# rows or unbounded real Razorpay payment-link creations (execute_action
+# calls a real API for retry_now/prompt_alt_payment presets), not survive a
+# distributed attack.
+# --------------------------------------------------------------------------
+TRIGGER_RATE_LIMIT = 20
+TRIGGER_RATE_WINDOW_SECONDS = 60
+_trigger_request_times: deque = deque()
+
+
+def _check_trigger_rate_limit() -> bool:
+    now = time.time()
+    while _trigger_request_times and now - _trigger_request_times[0] > TRIGGER_RATE_WINDOW_SECONDS:
+        _trigger_request_times.popleft()
+    if len(_trigger_request_times) >= TRIGGER_RATE_LIMIT:
+        return False
+    _trigger_request_times.append(now)
+    return True
+
+
+# --------------------------------------------------------------------------
+# Task 2 -- read-only dashboard API
+# --------------------------------------------------------------------------
+def _df_records(df: pd.DataFrame) -> list[dict]:
+    """DataFrame -> JSON-safe list of dicts. Uses pandas' own to_json (not
+    .to_dict()) because it correctly converts numpy scalar dtypes
+    (int64/float64/bool_) and NaN -> null -- .to_dict() leaves numpy scalars
+    in place, which Flask's json encoder can't serialize, and
+    legitimately-empty cells (e.g. llm_confidence on a non-LLM-routed row)
+    are the normal case in this data, not an edge case to special-case
+    around."""
+    if df.empty:
+        return []
+    return json.loads(df.to_json(orient="records"))
+
+
+def _read_log_tail(path: Path, limit: int, offset: int) -> tuple[list[dict], int]:
+    if not path.exists():
+        return [], 0
+    df = pd.read_csv(path)
+    total = len(df)
+    df = df.iloc[::-1]  # newest first -- the file is append-only in chronological order
+    df = df.iloc[offset: offset + limit]
+    return _df_records(df), total
+
+
+@app.route("/api/audit-log", methods=["GET"])
+def api_audit_log():
+    """Reads logs/webhook_audit_log.csv -- the live pipeline-decision log
+    (real webhook cases AND dashboard-triggered synthetic ones, see `source`
+    column). NOT logs/audit_log.csv, which is exclusively
+    pipeline/run_batch.py's frozen 280-row synthetic training-batch output
+    and is never touched by anything in this file."""
+    limit = request.args.get("limit", 50, type=int)
+    offset = request.args.get("offset", 0, type=int)
+    rows, total = _read_log_tail(run_case.WEBHOOK_AUDIT_LOG_PATH, limit, offset)
+    return jsonify({"rows": rows, "count": len(rows), "total": total})
+
+
+@app.route("/api/webhook-log", methods=["GET"])
+def api_webhook_log():
+    limit = request.args.get("limit", 50, type=int)
+    offset = request.args.get("offset", 0, type=int)
+    rows, total = _read_log_tail(WEBHOOK_LOG_PATH, limit, offset)
+    return jsonify({"rows": rows, "count": len(rows), "total": total})
+
+
+def _count_true(series: pd.Series) -> int:
+    if series.dtype == bool:
+        return int(series.sum())
+    return int(series.astype(str).str.strip().str.lower().eq("true").sum())
+
+
+@app.route("/api/summary", methods=["GET"])
+def api_summary():
+    path = run_case.WEBHOOK_AUDIT_LOG_PATH
+    if not path.exists():
+        return jsonify(
+            {
+                "total_cases": 0, "routed_to_llm": 0, "guardrail_overrode": 0, "requires_human_review": 0,
+                "recovered": 0, "failed_or_pending": 0, "execution_status_breakdown": {},
+            }
+        )
+
+    df = pd.read_csv(path)
+    total = len(df)
+    recovered = int((df["final_action"] == "recovered").sum()) if "final_action" in df.columns else 0
+    execution_status_breakdown = (
+        df["execution_status"].fillna("unknown").value_counts().to_dict() if "execution_status" in df.columns else {}
+    )
+
+    return jsonify(
+        {
+            "total_cases": total,
+            "routed_to_llm": _count_true(df["routed_to_llm"]) if "routed_to_llm" in df.columns else 0,
+            "guardrail_overrode": _count_true(df["guardrail_overrode"]) if "guardrail_overrode" in df.columns else 0,
+            "requires_human_review": (
+                _count_true(df["requires_human_review"]) if "requires_human_review" in df.columns else 0
+            ),
+            "recovered": recovered,
+            "failed_or_pending": total - recovered,
+            "execution_status_breakdown": execution_status_breakdown,
+        }
+    )
+
+
+# --------------------------------------------------------------------------
+# Task 3 -- synthetic test-case trigger, bypassing real Razorpay entirely.
+#
+# Body: {"event_type": "payment.failed" (default) | "subscription.pending" |
+# "subscription.halted" | "subscription.charged", "case": {...}}. "case" is
+# shaped like map_payload_to_case()'s output -- any field the caller omits
+# falls back to DEFAULT_TEST_CASE below. Reuses run_case.run_recovery_case /
+# run_recovered_case directly -- the exact same functions the real webhook
+# path calls above -- nothing pipeline-related is reimplemented here.
+#
+# Every triggered case_id is forced to start with "manual_test_" and every
+# row is written with source="manual_test" (see run_case.py), so it can
+# never be mistaken for a real customer event in the audit trail.
+# --------------------------------------------------------------------------
+MANUAL_TEST_CASE_ID_PREFIX = "manual_test_"
+
+DEFAULT_TEST_CASE = {
+    "decline_code": "generic_decline",
+    "decline_code_bucket": "AMBIGUOUS",
+    "decline_code_is_ambiguous": True,
+    "error_description": None,
+    "error_source": None,
+    "error_step": None,
+    "amount": 500.0,
+    "retry_attempt_number": 1,
+    "payment_rail": "card",
+    "day_of_week": "mon",
+    "time_of_day_bucket": "morning",
+    "is_peak_execution_window": False,
+    "customer_id": None,
+    "customer_key": None,
+    "customer_history_source": "synthetic_test_default",
+    "email": None,
+    "contact": None,
+    "guardrail_flags": None,
+    "customer_tenure_days": 365,
+    "ltv_tier": "medium",
+    "historical_ptp_honor_rate": 0.5,
+    "prior_retry_success_count": 0,
+    "hours_since_last_attempt": 24.0,
+    "issuer_bank_risk_tier": "medium_risk",
+    "amount_vs_historical_avg": 1.0,
+}
+
+
+def _default_manual_test_case_id() -> str:
+    return f"{MANUAL_TEST_CASE_ID_PREFIX}{int(time.time() * 1000)}"
+
+
+def _force_manual_test_prefix(case_id: str | None) -> str:
+    if not case_id:
+        return _default_manual_test_case_id()
+    return case_id if str(case_id).startswith(MANUAL_TEST_CASE_ID_PREFIX) else f"{MANUAL_TEST_CASE_ID_PREFIX}{case_id}"
+
+
+def _build_manual_test_case(payload_case: dict) -> dict:
+    case = {**DEFAULT_TEST_CASE, **(payload_case or {})}
+    case["case_id"] = _force_manual_test_prefix(case.get("case_id"))
+    case.setdefault("cumulative_retries_this_txn", case["retry_attempt_number"])
+    return case
+
+
+@app.route("/api/trigger-test-case", methods=["POST"])
+def api_trigger_test_case():
+    if not _check_trigger_rate_limit():
+        return (
+            jsonify(
+                {
+                    "error": "rate_limited",
+                    "message": f"Max {TRIGGER_RATE_LIMIT} trigger requests per {TRIGGER_RATE_WINDOW_SECONDS}s",
+                }
+            ),
+            429,
+        )
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "bad_request", "message": "expected a JSON object body"}), 400
+
+    event_type = body.get("event_type") or "payment.failed"
+    payload_case = body.get("case") or {}
+    if not isinstance(payload_case, dict):
+        return jsonify({"error": "bad_request", "message": "'case' must be a JSON object"}), 400
+
+    logger.info("Dashboard trigger: event_type=%s remote_addr=%s", event_type, request.remote_addr)
+
+    try:
+        if event_type == RECOVERED_EVENT:
+            case_id = _force_manual_test_prefix(payload_case.get("case_id"))
+            amount = float(payload_case.get("amount", 500.0))
+            customer_key = payload_case.get("customer_key")
+            row = run_case.run_recovered_case(
+                case_id, amount, customer_key, event_type, source=run_case.SOURCE_MANUAL_TEST
+            )
+        else:
+            case_facts = _build_manual_test_case(payload_case)
+            row = run_case.run_recovery_case(case_facts, event_type, source=run_case.SOURCE_MANUAL_TEST)
+
+        _append_webhook_log(event_type, True, row["case_id"], OUTCOME_PROCESSED)
+        return jsonify({"status": "processed", "row": _df_records(pd.DataFrame([row]))[0]}), 200
+
+    except Exception as exc:
+        logger.exception("Dashboard trigger error: event_type=%s", event_type)
+        _append_webhook_log(
+            event_type, True, payload_case.get("case_id"), OUTCOME_ERROR, f"{type(exc).__name__}: {exc}"
+        )
+        return jsonify({"status": "error", "message": f"{type(exc).__name__}: {exc}"}), 500
+
+
+# --------------------------------------------------------------------------
+# Task 5 -- dashboard page. No authentication (removed at user's request --
+# this endpoint, the /api/* endpoints, and the audit/webhook logs are all
+# publicly readable/triggerable at https://razor-recover.heracle.fit).
+# --------------------------------------------------------------------------
+DASHBOARD_HTML_PATH = BASE_DIR / "dashboard" / "index.html"
+
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    return Response(DASHBOARD_HTML_PATH.read_text(encoding="utf-8"), mimetype="text/html")
+
+
 def _startup_checks() -> None:
     if not RAZORPAY_WEBHOOK_SECRET:
         logger.error("RAZORPAY_WEBHOOK_SECRET is not set -- refusing to start (see .env.example).")
         sys.exit(1)
     logger.info("Warming up pipeline (loading model + fitting SHAP background + confidence-gate band)...")
-    _get_probability_band()
+    band_low, band_high = run_case.get_probability_band()
+    logger.info("Confidence-gate probability band fit: low=%.4f high=%.4f", band_low, band_high)
     logger.info("Pipeline warm-up complete.")
 
 
