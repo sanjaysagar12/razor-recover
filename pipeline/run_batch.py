@@ -102,6 +102,7 @@ AUDIT_COLUMNS = [
     "decline_code",
     "amount",
     "tree_model_score",
+    "routing_rationale",
     "tree_model_top_features",
     "routed_to_llm",
     "llm_recommended_action",
@@ -125,6 +126,37 @@ AUDIT_COLUMNS = [
     "pipeline_retried",
     "baseline_retried",
 ]
+
+
+# --------------------------------------------------------------------------
+# Confidence-gate routing transparency (Phase 8 follow-up)
+# --------------------------------------------------------------------------
+def _routing_rationale(
+    tree_score: float,
+    decline_code: str,
+    band_low: float,
+    band_high: float,
+    routing_trigger: list[str],
+    routed_to_llm: bool,
+    template_action: Optional[str],
+) -> str:
+    """Human-readable explanation of confidence_gate.route_case()'s routing
+    decision for one case. Built ONLY from that function's own inputs
+    (band_low/band_high, routing_trigger) plus its own private helpers
+    (_in_probability_band, _decline_code_prefix, _is_ambiguous_code),
+    reused here read-only -- never reimplemented -- so this string can never
+    drift from what confidence_gate.py actually decided for this case."""
+    in_band = confidence_gate._in_probability_band(tree_score, band_low, band_high)
+    prefix = confidence_gate._decline_code_prefix(decline_code)
+    is_ambiguous = confidence_gate._is_ambiguous_code(decline_code)
+
+    band_clause = f"score={tree_score:.4f} vs band=[{band_low:.4f}, {band_high:.4f}] (in_band={in_band})"
+    code_clause = f"decline_code={decline_code!r} prefix={prefix!r} (ambiguous_code={is_ambiguous})"
+
+    if routed_to_llm:
+        trigger_str = "+".join(routing_trigger) if routing_trigger else "unknown"
+        return f"{band_clause}; {code_clause} -> ROUTED to LLM (trigger: {trigger_str})"
+    return f"{band_clause}; {code_clause} -> NOT routed (template_action={template_action})"
 
 
 # --------------------------------------------------------------------------
@@ -190,13 +222,28 @@ def build_audit_row(
     case_facts: dict,
     tree_model_version: str,
     adapter: "llm_layer.LLMAdapter | None",
+    band_low: float,
+    band_high: float,
 ) -> dict:
     """record: one confidence_gate.route_case() result (case_id,
     tree_model_score, routed_to_llm, routing_trigger, template_action).
     shap_top: this case's SHAP top-5 (shap_extract.get_shap_top_features
-    shape). case_facts: shap_extract.get_case_facts(case_id)."""
+    shape). case_facts: shap_extract.get_case_facts(case_id). band_low/
+    band_high: this batch's confidence-gate probability band (see
+    confidence_gate.compute_probability_band), passed through only so
+    _routing_rationale can explain the routing decision -- routing itself
+    was already decided upstream in confidence_gate.route_case()."""
     case_id = record["case_id"]
     routed_to_llm = record["routed_to_llm"]
+    routing_rationale = _routing_rationale(
+        record["tree_model_score"],
+        case_facts["decline_code"],
+        band_low,
+        band_high,
+        record["routing_trigger"],
+        routed_to_llm,
+        record["template_action"],
+    )
 
     if routed_to_llm:
         case_payload = {
@@ -261,6 +308,7 @@ def build_audit_row(
         "decline_code": case_facts["decline_code"],
         "amount": case_facts["amount"],
         "tree_model_score": record["tree_model_score"],
+        "routing_rationale": routing_rationale,
         "tree_model_top_features": json.dumps(
             [{"feature": f["feature"], "value": f["value"], "shap_value": f["shap_value"]} for f in shap_top]
         ),
@@ -297,6 +345,8 @@ def run_batch(adapter: "llm_layer.LLMAdapter | None" = None) -> pd.DataFrame:
     scores_df = shap_extract.get_scores_df()
     shap_by_case = shap_extract.run_full_batch()
     routing = confidence_gate.run_full_batch(scores_df)
+    band_low = routing["computed_probability_band"]["low"]
+    band_high = routing["computed_probability_band"]["high"]
 
     if adapter is None and any(r["routed_to_llm"] for r in routing["records"]):
         adapter = llm_layer.get_llm_adapter()
@@ -306,7 +356,7 @@ def run_batch(adapter: "llm_layer.LLMAdapter | None" = None) -> pd.DataFrame:
         case_id = record["case_id"]
         shap_top = shap_by_case[case_id]
         case_facts = shap_extract.get_case_facts(case_id)
-        rows.append(build_audit_row(record, shap_top, case_facts, tree_model_version, adapter))
+        rows.append(build_audit_row(record, shap_top, case_facts, tree_model_version, adapter, band_low, band_high))
 
     return pd.DataFrame(rows, columns=AUDIT_COLUMNS)
 
@@ -371,6 +421,101 @@ def compute_simulation(audit_df: pd.DataFrame) -> dict:
         "net_lift_pct": net_lift_pct,
         "pipeline_override_counts": pipeline_override_counts,
         "baseline_override_counts": baseline_override_counts,
+    }
+
+
+def compute_three_scenario_simulation(audit_df: pd.DataFrame) -> dict:
+    """Splits the single pipeline-vs-baseline comparison in compute_simulation
+    into three scenarios, because collapsing them into one hid a real
+    apples-to-oranges problem: the existing "baseline" is ALREADY guardrailed
+    (see module docstring above), but reading its recovered-$ next to the
+    pipeline's invited exactly the misreading that a truly UNguardrailed
+    "retry everyone, no compliance check" policy would have been fairer to
+    the pipeline than it deserves credit for.
+
+    Three scenarios, same audit log, same ground-truth outcomes:
+
+      * naive_no_guardrails -- retries literally every case, zero rule
+        checks applied to what counts as "retried". Its compliance_violations
+        count reuses the guardrail pass ALREADY run against this exact
+        retry_now proposal for the (guardrailed) baseline scenario --
+        baseline_guardrail_overrode is True exactly when that retry_now
+        proposal would have been blocked by guardrails.py, i.e. exactly this
+        policy's compliance violations. This reuses that existing pass-
+        through result; it does not re-invoke or alter guardrails.py.
+      * compliant_no_targeting -- retries every case the guardrail layer
+        allows, with zero tree-model/LLM targeting. This is exactly the
+        existing baseline_* audit columns (already guardrailed -- see "Why
+        the naive baseline is ALSO guardrailed" above), re-surfaced under a
+        clearer name so it sits next to naive_no_guardrails instead of being
+        confused with it.
+      * pipeline -- the actual ML/LLM-targeted, guardrailed pipeline. Same
+        pipeline_* columns compute_simulation already uses.
+
+    Every scenario also reports recovered_rs_per_attempt (gross recovered /
+    retry attempts) -- revenue efficiency per retry fired, independent of
+    how many cases a policy chose to retry in the first place.
+    """
+    ground_truth = shap_extract.load_batch_df()[["case_id", "outcome"]]
+    merged = audit_df.merge(ground_truth, on="case_id", how="left")
+    if merged["outcome"].isna().any():
+        missing = merged.loc[merged["outcome"].isna(), "case_id"].tolist()
+        raise ValueError(f"No ground-truth outcome for case_id(s): {missing}")
+
+    would_recover = merged["outcome"] == 1
+    amount = merged["amount"]
+    n_cases = len(merged)
+    total_amount = float(amount.sum())
+
+    baseline_retried = merged["baseline_retried"].astype(bool)
+    baseline_overrode = merged["baseline_guardrail_overrode"].astype(bool)
+    pipeline_retried = merged["pipeline_retried"].astype(bool)
+    pipeline_overrode = merged["guardrail_overrode"].astype(bool)
+
+    def _scenario(gross: float, attempts: int, compliance_violations: int) -> dict:
+        net = gross - attempts * COST_PER_RETRY_ATTEMPT
+        return {
+            "retry_attempts": attempts,
+            "gross_recovered": gross,
+            "net_recovered": net,
+            "net_recovered_pct": (net / total_amount * 100.0) if total_amount else float("nan"),
+            "recovered_rs_per_attempt": (gross / attempts) if attempts else 0.0,
+            "compliance_violations": compliance_violations,
+        }
+
+    naive_no_guardrails = _scenario(
+        gross=float(amount[would_recover].sum()),
+        attempts=n_cases,
+        compliance_violations=int(baseline_overrode.sum()),
+    )
+    compliant_no_targeting = _scenario(
+        gross=float(amount[baseline_retried & would_recover].sum()),
+        attempts=int(baseline_retried.sum()),
+        # Guaranteed 0 by construction (an overridden proposal is forced to
+        # NO_RETRY_ACTION, so it can never also count as retried) -- computed
+        # rather than hardcoded, as a live check of that invariant.
+        compliance_violations=int((baseline_retried & baseline_overrode).sum()),
+    )
+    pipeline = _scenario(
+        gross=float(amount[pipeline_retried & would_recover].sum()),
+        attempts=int(pipeline_retried.sum()),
+        compliance_violations=int((pipeline_retried & pipeline_overrode).sum()),
+    )
+
+    def _lift(a: dict, b: dict) -> dict:
+        absolute = a["net_recovered"] - b["net_recovered"]
+        pct = (absolute / b["net_recovered"] * 100.0) if b["net_recovered"] else float("nan")
+        return {"absolute": absolute, "pct": pct}
+
+    return {
+        "n_cases": n_cases,
+        "total_amount": total_amount,
+        "cost_per_retry_attempt": COST_PER_RETRY_ATTEMPT,
+        "naive_no_guardrails": naive_no_guardrails,
+        "compliant_no_targeting": compliant_no_targeting,
+        "pipeline": pipeline,
+        "lift_pipeline_vs_naive_no_guardrails": _lift(pipeline, naive_no_guardrails),
+        "lift_pipeline_vs_compliant_no_targeting": _lift(pipeline, compliant_no_targeting),
     }
 
 
