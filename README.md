@@ -270,8 +270,10 @@ the LLM-invoked showcase case, the LLM output already recorded in
 `logs/audit_log.csv` from a prior real API run) — it never samples or
 calls a live model at demo time.
 
-## Roadmap
+## Live webhooks + dashboard
 
-Remaining, not part of Phase 8: webhook handling for `payment.failed` /
-`subscription.*` events (this repo runs against a pre-collected batch, not
-live webhooks).
+Beyond the batch demo above, `webhook_receiver.py` runs the same pipeline
+against real Razorpay `payment.failed` / `subscription.*` webhooks, and
+serves a live dashboard (audit log, webhook log, guardrail-preset triggers)
+at `/dashboard`. See [README_WEBHOOK.md](README_WEBHOOK.md) for setup, the
+dashboard walkthrough, and known limitations.
