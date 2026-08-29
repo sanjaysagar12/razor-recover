@@ -44,6 +44,7 @@ sys.path.insert(0, str(PIPELINE_DIR))
 import confidence_gate  # noqa: E402
 import customer_history  # noqa: E402
 import decline_code_mapper  # noqa: E402
+import execute_action  # noqa: E402
 import run_case  # noqa: E402
 
 load_dotenv()
@@ -715,6 +716,96 @@ def api_trigger_test_case():
             event_type, True, payload_case.get("case_id"), OUTCOME_ERROR, f"{type(exc).__name__}: {exc}"
         )
         return jsonify({"status": "error", "message": f"{type(exc).__name__}: {exc}"}), 500
+
+
+# --------------------------------------------------------------------------
+# Task -- per-case detail view: the full flow for ONE case_id in one place --
+# its audit row (SHAP top features, routing_rationale, LLM reasoning_summary,
+# guardrail flags/override, execution result, final_action), its
+# webhook_log.csv transport-layer row(s) if any, and every matching line
+# from logs/webhook_receiver.log's step-by-step trace (see
+# pipeline/run_case.py's "step N/6" logging) -- so "what happened to this
+# case, in order, including what the LLM actually said" is answerable from
+# one screen instead of cross-referencing three files by hand.
+# --------------------------------------------------------------------------
+MAX_LOG_LINES_RETURNED = 500
+
+
+@app.route("/api/case-detail/<path:case_id>", methods=["GET"])
+def api_case_detail(case_id):
+    audit_row = None
+    if run_case.WEBHOOK_AUDIT_LOG_PATH.exists():
+        df = pd.read_csv(run_case.WEBHOOK_AUDIT_LOG_PATH)
+        match = df[df["case_id"] == case_id]
+        if not match.empty:
+            audit_row = _df_records(match)[0]
+
+    webhook_log_rows = []
+    if WEBHOOK_LOG_PATH.exists():
+        wdf = pd.read_csv(WEBHOOK_LOG_PATH)
+        wmatch = wdf[wdf["case_id"] == case_id]
+        webhook_log_rows = _df_records(wmatch)
+
+    log_lines = []
+    receiver_log_path = LOGS_DIR / "webhook_receiver.log"
+    if receiver_log_path.exists():
+        needle = f"case_id={case_id}"
+        with open(receiver_log_path, "r", encoding="utf-8", errors="replace") as f:
+            log_lines = [line.rstrip("\n") for line in f if needle in line]
+        if len(log_lines) > MAX_LOG_LINES_RETURNED:
+            log_lines = log_lines[-MAX_LOG_LINES_RETURNED:]
+
+    if audit_row is None and not webhook_log_rows and not log_lines:
+        return jsonify({"error": "not_found", "message": f"No data found for case_id={case_id!r}"}), 404
+
+    return jsonify(
+        {"case_id": case_id, "audit_row": audit_row, "webhook_log_rows": webhook_log_rows, "log_lines": log_lines}
+    )
+
+
+# --------------------------------------------------------------------------
+# Dashboard "reset" -- clears the demo/log state back to empty so a session
+# of preset-clicking and custom triggers doesn't linger into the next demo.
+# Empties (not deletes) the three CSV logs by rewriting them header-only, so
+# /api/audit-log etc. keep working immediately (an empty list, not a missing
+# file). logs/audit_log.csv (the synthetic training batch) and
+# logs/webhook_receiver.log (the live text trace of the running process,
+# which Windows will refuse to truncate out from under an open file handle
+# anyway) are deliberately never touched here.
+#
+# reset_customer_history is opt-in (default False) -- it wipes real
+# accumulated per-customer state (pipeline/customer_history.py), which is
+# a bigger, less obviously-reversible action than clearing a log, so it
+# isn't bundled into the default reset.
+# --------------------------------------------------------------------------
+@app.route("/api/reset-logs", methods=["POST"])
+def api_reset_logs():
+    body = request.get_json(silent=True) or {}
+    reset_customer_history = bool(body.get("reset_customer_history", False))
+
+    reset = []
+
+    run_case.WEBHOOK_AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(columns=run_case.WEBHOOK_AUDIT_COLUMNS).to_csv(run_case.WEBHOOK_AUDIT_LOG_PATH, index=False)
+    reset.append(run_case.WEBHOOK_AUDIT_LOG_PATH.name)
+
+    WEBHOOK_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(columns=WEBHOOK_LOG_COLUMNS).to_csv(WEBHOOK_LOG_PATH, index=False)
+    reset.append(WEBHOOK_LOG_PATH.name)
+
+    execute_action.PENDING_RETRIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(columns=execute_action.PENDING_RETRIES_COLUMNS).to_csv(execute_action.PENDING_RETRIES_PATH, index=False)
+    reset.append(execute_action.PENDING_RETRIES_PATH.name)
+
+    if reset_customer_history and customer_history.DB_PATH.exists():
+        customer_history.DB_PATH.unlink()
+        reset.append(customer_history.DB_PATH.name)
+
+    logger.warning(
+        "Dashboard reset triggered: cleared %s (reset_customer_history=%s) remote_addr=%s",
+        reset, reset_customer_history, request.remote_addr,
+    )
+    return jsonify({"status": "reset", "cleared": reset, "reset_customer_history": reset_customer_history})
 
 
 # --------------------------------------------------------------------------

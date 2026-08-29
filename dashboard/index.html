@@ -63,6 +63,12 @@
     padding: 8px 16px; cursor: pointer; font-weight: 600;
   }
   button.primary:hover { filter: brightness(1.1); }
+  .danger-btn {
+    background: transparent; border: 1px solid var(--red); color: var(--red);
+    border-radius: 8px; padding: 5px 12px; cursor: pointer; font-size: 12px; font-weight: 600;
+  }
+  .danger-btn:hover { background: rgba(239,90,111,.12); }
+  .danger-btn:disabled { opacity: .5; cursor: not-allowed; }
   pre.response {
     margin-top: 10px; background: #0b0f19; border: 1px solid var(--border); border-radius: 8px;
     padding: 10px; font-size: 11px; max-height: 220px; overflow: auto; white-space: pre-wrap;
@@ -83,6 +89,8 @@
   }
   tbody td { padding: 7px 10px; border-bottom: 1px solid #1e2637; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
   tbody tr:hover { background: #1a2237; }
+  tbody tr.clickable-row { cursor: pointer; }
+  tbody tr.clickable-row:hover { background: #212c47; }
   tbody tr.hl-override { background: rgba(239, 90, 111, 0.12); }
   tbody tr.hl-review { background: rgba(232, 177, 59, 0.10); }
   tbody tr.hl-override.hl-review { background: rgba(239, 90, 111, 0.20); }
@@ -108,6 +116,40 @@
   @keyframes slidein { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
   .empty { color: var(--text-dim); padding: 20px; text-align: center; }
+
+  #detailOverlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none;
+    align-items: flex-start; justify-content: center; padding: 40px 20px; overflow-y: auto; z-index: 100;
+  }
+  #detailOverlay.open { display: flex; }
+  .detail-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    max-width: 780px; width: 100%; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .detail-card .dhead { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+  .detail-card h3 { margin: 0; font-size: 16px; }
+  .detail-card .close-btn { background: none; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer; line-height: 1; }
+  .detail-card .close-btn:hover { color: var(--text); }
+  .dsection { margin-bottom: 18px; }
+  .dsection h4 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); }
+  .decision-box {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 10px;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+  }
+  .decision-box .kv .k { font-size: 10px; color: var(--text-dim); text-transform: uppercase; }
+  .decision-box .kv .v { font-size: 14px; font-weight: 700; margin-top: 2px; }
+  .ai-response {
+    background: #12182a; border-left: 3px solid var(--purple); border-radius: 6px;
+    padding: 12px 14px; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap;
+  }
+  .shap-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+  .shap-table td { padding: 4px 6px; border-bottom: 1px solid #1e2637; }
+  .shap-table .pos { color: var(--green); }
+  .shap-table .neg { color: var(--red); }
+  .dsection pre.detail-log {
+    background: #0b0f19; border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    font-size: 11px; max-height: 260px; overflow: auto; white-space: pre-wrap; margin: 0;
+  }
 </style>
 </head>
 <body>
@@ -120,6 +162,8 @@
   <div class="controls">
     <span id="lastUpdated">not yet loaded</span>
     <label><input type="checkbox" id="pauseToggle"> pause auto-refresh</label>
+    <label><input type="checkbox" id="resetCustomerHistoryToggle"> also reset customer history</label>
+    <button class="danger-btn" id="resetLogsBtn" title="Clears webhook_audit_log.csv, webhook_log.csv, pending_retries.csv">Reset logs</button>
   </div>
 </header>
 
@@ -162,6 +206,10 @@
 </section>
 
 <div id="toasts"></div>
+
+<div id="detailOverlay" onclick="if(event.target===this) closeCaseDetail()">
+  <div class="detail-card" id="detailCard"></div>
+</div>
 
 <script>
 const REFRESH_MS = 5000;
@@ -222,7 +270,7 @@ function boolBadge(v) {
   return escapeHtml(v);
 }
 
-function renderTable(tableId, cols, rows) {
+function renderTable(tableId, cols, rows, clickable) {
   const table = document.getElementById(tableId);
   table.querySelector('thead').innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>';
   const tbody = table.querySelector('tbody');
@@ -233,7 +281,8 @@ function renderTable(tableId, cols, rows) {
   tbody.innerHTML = rows.map(row => {
     const overrode = row.guardrail_overrode === true || row.guardrail_overrode === 'True';
     const review = row.requires_human_review === true || row.requires_human_review === 'True';
-    const cls = [overrode ? 'hl-override' : '', review ? 'hl-review' : ''].filter(Boolean).join(' ');
+    const cls = [overrode ? 'hl-override' : '', review ? 'hl-review' : '', clickable ? 'clickable-row' : '']
+      .filter(Boolean).join(' ');
     const cells = cols.map(c => {
       const v = row[c];
       if (c === 'guardrail_overrode' || c === 'requires_human_review' || c === 'routed_to_llm' || c === 'signature_valid') {
@@ -244,7 +293,8 @@ function renderTable(tableId, cols, rows) {
       }
       return `<td title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
     }).join('');
-    return `<tr class="${cls}">${cells}</tr>`;
+    const attr = clickable ? ` data-case-id="${escapeHtml(row.case_id)}" onclick="showCaseDetail(this.dataset.caseId)"` : '';
+    return `<tr class="${cls}"${attr}>${cells}</tr>`;
   }).join('');
 }
 
@@ -258,8 +308,8 @@ function applyFiltersAndRender() {
   if (fOverrode) rows = rows.filter(r => String(r.guardrail_overrode) === fOverrode);
   if (fExec) rows = rows.filter(r => r.execution_status === fExec);
 
-  renderTable('auditTable', AUDIT_COLS, rows);
-  renderTable('webhookTable', WEBHOOK_COLS, webhookRows);
+  renderTable('auditTable', AUDIT_COLS, rows, true);
+  renderTable('webhookTable', WEBHOOK_COLS, webhookRows, false);
 }
 
 function populateExecStatusFilter() {
@@ -301,6 +351,35 @@ let intervalHandle = setInterval(refreshAll, REFRESH_MS);
 document.getElementById('pauseToggle').addEventListener('change', (e) => {
   if (e.target.checked) { clearInterval(intervalHandle); }
   else { intervalHandle = setInterval(refreshAll, REFRESH_MS); }
+});
+
+// -- Reset logs ------------------------------------------------------------
+document.getElementById('resetLogsBtn').addEventListener('click', async () => {
+  const alsoCustomerHistory = document.getElementById('resetCustomerHistoryToggle').checked;
+  const msg = alsoCustomerHistory
+    ? 'Clear webhook_audit_log.csv, webhook_log.csv, pending_retries.csv AND all customer history? This cannot be undone.'
+    : 'Clear webhook_audit_log.csv, webhook_log.csv, and pending_retries.csv? This cannot be undone.';
+  if (!confirm(msg)) return;
+
+  const btn = document.getElementById('resetLogsBtn');
+  btn.disabled = true;
+  try {
+    const resp = await apiFetch('/api/reset-logs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reset_customer_history: alsoCustomerHistory }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      toast('err', 'Reset failed', data.message || resp.statusText);
+    } else {
+      toast('ok', 'Logs reset', 'Cleared: ' + (data.cleared || []).join(', '));
+    }
+    await refreshAll();
+  } catch (e) {
+    toast('err', 'Reset error', String(e));
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // -- Trigger (presets + custom) ------------------------------------------
@@ -429,6 +508,119 @@ document.getElementById('customTriggerBtn').addEventListener('click', async () =
   const data = await triggerCase(payload, document.getElementById('customTriggerBtn'));
   responseEl.style.display = 'block';
   responseEl.textContent = JSON.stringify(data, null, 2);
+});
+
+// -- Case detail ------------------------------------------------------------
+function fmtBool(v) {
+  if (v === true || v === 'True') return '<span class="badge true">true</span>';
+  if (v === false || v === 'False') return '<span class="badge false">false</span>';
+  return '<span class="badge false">--</span>';
+}
+
+function renderShapTable(jsonStr) {
+  let features;
+  try { features = JSON.parse(jsonStr); } catch (e) { return '<div class="sub">(none)</div>'; }
+  if (!Array.isArray(features) || !features.length) return '<div class="sub">(none)</div>';
+  const rows = features.map(f => {
+    const shap = Number(f.shap_value);
+    const cls = shap >= 0 ? 'pos' : 'neg';
+    const sign = shap >= 0 ? '+' : '';
+    return `<tr><td>${escapeHtml(f.feature)}</td><td>${escapeHtml(f.value)}</td><td class="${cls}">${sign}${shap.toFixed(4)}</td></tr>`;
+  }).join('');
+  return `<table class="shap-table"><tr><td><b>feature</b></td><td><b>value</b></td><td><b>shap_value</b></td></tr>${rows}</table>`;
+}
+
+function renderCaseDetail(data) {
+  const row = data.audit_row;
+  if (!row) {
+    return `<div class="dhead"><h3>${escapeHtml(data.case_id)}</h3><button class="close-btn" onclick="closeCaseDetail()">&times;</button></div>
+      <div class="empty">No audit row found for this case_id (may only exist in the webhook transport log).</div>
+      ${data.log_lines.length ? `<div class="dsection"><h4>Log trace</h4><pre class="detail-log">${escapeHtml(data.log_lines.join('\n'))}</pre></div>` : ''}`;
+  }
+
+  const aiResponse = row.routed_to_llm
+    ? (row.llm_reasoning_summary || '(LLM routed but no reasoning_summary captured -- likely a schema-validation fallback; check llm_schema_valid below)')
+    : '(Not routed to the LLM -- this case was resolved by the tree-model template action, no AI reasoning involved.)';
+
+  return `
+    <div class="dhead">
+      <div>
+        <h3>${escapeHtml(row.case_id)}</h3>
+        <div class="sub">${escapeHtml(row.timestamp)} &middot; source=${escapeHtml(row.source)} &middot; pipeline=${escapeHtml(row.pipeline_version)}</div>
+      </div>
+      <button class="close-btn" onclick="closeCaseDetail()">&times;</button>
+    </div>
+
+    <div class="dsection">
+      <h4>Final decision</h4>
+      <div class="decision-box">
+        <div class="kv"><div class="k">final_action</div><div class="v">${escapeHtml(row.final_action)}</div></div>
+        <div class="kv"><div class="k">proposed_action</div><div class="v">${escapeHtml(row.proposed_action)}</div></div>
+        <div class="kv"><div class="k">guardrail_overrode</div><div class="v">${fmtBool(row.guardrail_overrode)}</div></div>
+        <div class="kv"><div class="k">override_rule</div><div class="v">${escapeHtml(row.override_rule) || '--'}</div></div>
+        <div class="kv"><div class="k">requires_human_review</div><div class="v">${fmtBool(row.requires_human_review)}</div></div>
+        <div class="kv"><div class="k">guardrail_flags</div><div class="v">${escapeHtml(row.guardrail_flags) || '--'}</div></div>
+      </div>
+    </div>
+
+    <div class="dsection">
+      <h4>Flow</h4>
+      <div class="sub">decline_code=${escapeHtml(row.decline_code)} (${escapeHtml(row.decline_code_bucket)}, is_ambiguous=${row.decline_code_is_ambiguous}) &middot; amount=${escapeHtml(row.amount)} &middot; tree_model_score=${Number(row.tree_model_score).toFixed(4)}</div>
+      <div class="sub" style="margin-top:6px">${escapeHtml(row.routing_rationale)}</div>
+      <div class="sub" style="margin-top:6px">routed_to_llm=${fmtBool(row.routed_to_llm)} &middot; llm_recommended_action=${escapeHtml(row.llm_recommended_action) || '--'} &middot; llm_confidence=${row.llm_confidence ?? '--'} &middot; llm_schema_valid=${fmtBool(row.llm_schema_valid)}</div>
+    </div>
+
+    <div class="dsection">
+      <h4>AI response (reasoning_summary)</h4>
+      <div class="ai-response">${escapeHtml(aiResponse)}</div>
+    </div>
+
+    <div class="dsection">
+      <h4>SHAP top features</h4>
+      ${renderShapTable(row.tree_model_top_features)}
+    </div>
+
+    <div class="dsection">
+      <h4>Execution</h4>
+      <div class="sub">status=${escapeHtml(row.execution_status)} &middot; mechanism=${escapeHtml(row.execution_mechanism)}</div>
+      <div class="sub" style="margin-top:6px">${escapeHtml(row.execution_detail)}</div>
+    </div>
+
+    <div class="dsection">
+      <h4>Customer history</h4>
+      <div class="sub">customer_key=${escapeHtml(row.customer_key) || '--'} &middot; source=${escapeHtml(row.customer_history_source) || '--'}</div>
+    </div>
+
+    <div class="dsection">
+      <h4>Log trace (logs/webhook_receiver.log, step-by-step)</h4>
+      <pre class="detail-log">${data.log_lines.length ? escapeHtml(data.log_lines.join('\n')) : '(no matching log lines -- may have been cleared by a reset)'}</pre>
+    </div>
+  `;
+}
+
+async function showCaseDetail(caseId) {
+  const card = document.getElementById('detailCard');
+  card.innerHTML = '<div class="empty">Loading...</div>';
+  document.getElementById('detailOverlay').classList.add('open');
+  try {
+    const resp = await apiFetch('/api/case-detail/' + encodeURIComponent(caseId));
+    const data = await resp.json();
+    if (!resp.ok) {
+      card.innerHTML = `<div class="dhead"><h3>${escapeHtml(caseId)}</h3><button class="close-btn" onclick="closeCaseDetail()">&times;</button></div><div class="empty">${escapeHtml(data.message || 'Not found')}</div>`;
+      return;
+    }
+    card.innerHTML = renderCaseDetail(data);
+  } catch (e) {
+    card.innerHTML = `<div class="empty">Error loading case detail: ${escapeHtml(String(e))}</div>`;
+  }
+}
+
+function closeCaseDetail() {
+  document.getElementById('detailOverlay').classList.remove('open');
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeCaseDetail();
 });
 
 // -- Init ------------------------------------------------------------
