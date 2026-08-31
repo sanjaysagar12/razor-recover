@@ -35,6 +35,7 @@ import confidence_gate
 import customer_history
 import execute_action
 import llm_layer
+import promise_store
 import run_batch
 import shap_extract
 
@@ -305,6 +306,90 @@ def run_recovered_case(
     )
     _append_webhook_audit_row(row)
     logger.info("case_id=%s event=%s DONE -- RECOVERED amount=%s customer_key=%s", case_id, event_type, amount, customer_key)
+    return row
+
+
+def run_promise_reschedule(
+    case: dict, promise: dict, guardrail_result: dict, source: str = SOURCE_REAL_WEBHOOK
+) -> dict:
+    """Executes + audits a guardrail-approved PTP reschedule -- same
+    guardrails -> execute_action -> audit-log shape as run_recovery_case's
+    steps 4/5/6 above, just entered from the promise-reply flow
+    (webhook_receiver.py's /api/promise-reply) instead of a payment-failure
+    webhook event.
+
+    Only ever called when guardrail_result["guardrail_status"] == "approved"
+    -- that check is the caller's routing decision (webhook_receiver.py);
+    execute_action.execute_promise_reschedule itself still refuses to run
+    for anything else as a second, defensive check.
+
+    case: case-shaped dict for promise["case_id"] (amount required;
+    customer_name/email/contact used opportunistically -- see
+    webhook_receiver._promise_date_case_context for how the live path builds
+    this). promise: a promise_store row (promise_id, case_id, customer_id,
+    extracted_date). guardrail_result: guardrails.apply_ptp_guardrails'
+    output for this promise.
+
+    Writes one row to logs/webhook_audit_log.csv -- the same live audit
+    trail run_recovery_case writes to, NOT logs/audit_log.csv (exclusively
+    run_batch.py's frozen synthetic-batch output -- see this module's
+    docstring). proposed_action carries the guardrail-approved decision
+    ("reschedule_to_<date>"); execution_status/execution_mechanism carry
+    what actually happened at the API level -- kept as two distinct fields,
+    the same audit-honesty split execution_mechanism already gives
+    retry_now (see execute_action.py's module docstring).
+
+    Also updates the promises table: payment_link_id on success (outcome
+    stays 'pending'), or outcome='reschedule_failed' on failure -- never a
+    false-positive "scheduled" state for a failed API call.
+    """
+    case_id = promise["case_id"]
+    promise_id = promise["promise_id"]
+    extracted_date = promise.get("extracted_date")
+    logger.info(
+        "case_id=%s promise_id=%s: executing PTP reschedule -- extracted_date=%s guardrail_status=%s",
+        case_id, promise_id, extracted_date, guardrail_result.get("guardrail_status"),
+    )
+
+    execution_result = execute_action.execute_promise_reschedule(case, promise, guardrail_result)
+    logger.info(
+        "case_id=%s promise_id=%s: PTP reschedule execution complete -- status=%s mechanism=%s",
+        case_id, promise_id, execution_result["execution_status"], execution_result["execution_mechanism"],
+    )
+
+    if execution_result["execution_status"] == "success":
+        promise_store.update_promise_payment_link(promise_id, execution_result["payment_link_id"])
+    else:
+        promise_store.mark_promise_reschedule_failed(promise_id)
+
+    row = blank_webhook_audit_row()
+    row.update(
+        {
+            "case_id": case_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "amount": case.get("amount"),
+            "decline_code": case.get("decline_code"),
+            "routed_to_llm": False,
+            "guardrail_flags": guardrail_result.get("guardrail_flags", []),
+            "proposed_action": f"reschedule_to_{extracted_date}",
+            "final_action": guardrail_result.get("final_action"),
+            "guardrail_overrode": False,
+            "requires_human_review": guardrail_result.get("requires_human_review", False),
+            "pipeline_version": run_batch.PIPELINE_VERSION,
+            "routing_rationale": f"PTP guardrail-approved reschedule for promise_id={promise_id}",
+            "customer_key": promise.get("customer_id"),
+            "execution_status": execution_result["execution_status"],
+            "execution_mechanism": execution_result["execution_mechanism"],
+            "execution_detail": execution_result["execution_detail"],
+            "execution_timestamp": execution_result["execution_timestamp"],
+            "source": source,
+        }
+    )
+    _append_webhook_audit_row(row)
+    logger.info(
+        "case_id=%s promise_id=%s DONE -- proposed_action=%s final_action=%s execution_status=%s",
+        case_id, promise_id, row["proposed_action"], row["final_action"], row["execution_status"],
+    )
     return row
 
 

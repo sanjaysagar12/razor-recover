@@ -27,6 +27,7 @@ DB_PATH = BASE_DIR / "data" / "customer_history.db"
 
 OUTCOME_PENDING = "pending"
 OUTCOME_AMBIGUOUS = "ambiguous"
+OUTCOME_RESCHEDULE_FAILED = "reschedule_failed"
 
 
 @contextmanager
@@ -102,4 +103,53 @@ def update_promise_extraction(
                 OUTCOME_AMBIGUOUS if ambiguous else OUTCOME_PENDING,
                 promise_id,
             ),
+        )
+
+
+def get_promise(promise_id: str) -> dict | None:
+    """Fetches one promises row as a plain dict, or None if promise_id
+    doesn't exist -- used by Phase 14's reschedule execution flow (and its
+    tests) to read back a promise record rather than re-threading every
+    field through function arguments by hand."""
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM promises WHERE promise_id = ?", (promise_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_promise_guardrail(promise_id: str, guardrail_status: str) -> None:
+    """Writes guardrails.apply_ptp_guardrails' verdict back onto the row --
+    called regardless of the verdict (approved, rejected_*, adjusted,
+    pending_clarification) so a non-approved promise's guardrail_status is
+    visible on the row without re-running guardrails to find out why it
+    wasn't scheduled."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE promises SET guardrail_status = ? WHERE promise_id = ?",
+            (guardrail_status, promise_id),
+        )
+
+
+def update_promise_payment_link(promise_id: str, payment_link_id: str) -> None:
+    """Phase 14 success path -- stores the Razorpay payment_link_id created
+    for this promise. outcome is deliberately left untouched (stays
+    'pending' -- a later phase moves it to honored/broken from webhook
+    events, not from the act of scheduling itself)."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE promises SET payment_link_id = ? WHERE promise_id = ?",
+            (payment_link_id, promise_id),
+        )
+
+
+def mark_promise_reschedule_failed(promise_id: str) -> None:
+    """Phase 14 failure path -- a Razorpay API/network failure must never be
+    silently recorded as a scheduled promise. payment_link_id stays NULL;
+    outcome moves to 'reschedule_failed' so a retry/backfill job can find
+    these directly instead of re-deriving the failure from an empty
+    payment_link_id on an otherwise-'pending' row."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE promises SET outcome = ? WHERE promise_id = ?",
+            (OUTCOME_RESCHEDULE_FAILED, promise_id),
         )

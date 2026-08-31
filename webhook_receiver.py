@@ -45,6 +45,7 @@ import confidence_gate  # noqa: E402
 import customer_history  # noqa: E402
 import decline_code_mapper  # noqa: E402
 import execute_action  # noqa: E402
+import guardrails  # noqa: E402
 import llm_layer  # noqa: E402
 import promise_store  # noqa: E402
 import run_case  # noqa: E402
@@ -624,6 +625,40 @@ def api_promise_reply():
     outcome = promise_store.OUTCOME_AMBIGUOUS if extraction["ambiguous"] else promise_store.OUTCOME_PENDING
     _append_promise_log(case_id, customer_id, promise_id, message, outcome, extraction)
 
+    # Phase 14 -- run the extraction through the Phase 13 PTP guardrails and,
+    # only when they approve it, execute the reschedule (create the Razorpay
+    # payment link). guardrail_status is written back onto the promise row
+    # regardless of the verdict, same as extracted_date/confidence above --
+    # rejected/pending_clarification verdicts route to human review /
+    # clarification (both already surfaced via guardrail_result's own
+    # requires_human_review / routed_to_clarification flags) rather than
+    # calling run_case.run_promise_reschedule at all.
+    guardrail_result = guardrails.apply_ptp_guardrails(case_context, extraction)
+    promise_store.update_promise_guardrail(promise_id, guardrail_result["guardrail_status"])
+    logger.info(
+        "Promise guardrail verdict: promise_id=%s case_id=%s guardrail_status=%s final_action=%s "
+        "guardrail_flags=%s requires_human_review=%s routed_to_clarification=%s",
+        promise_id, case_id, guardrail_result["guardrail_status"], guardrail_result["final_action"],
+        guardrail_result["guardrail_flags"], guardrail_result["requires_human_review"],
+        guardrail_result["routed_to_clarification"],
+    )
+
+    reschedule_result = None
+    if guardrail_result["guardrail_status"] == "approved":
+        promise_record = {
+            "promise_id": promise_id,
+            "case_id": case_id,
+            "customer_id": customer_id,
+            "extracted_date": extraction["extracted_date"],
+        }
+        reschedule_row = run_case.run_promise_reschedule(
+            case_context, promise_record, guardrail_result, source=run_case.SOURCE_REAL_WEBHOOK
+        )
+        reschedule_result = {
+            "execution_status": reschedule_row["execution_status"],
+            "execution_mechanism": reschedule_row["execution_mechanism"],
+        }
+
     return (
         jsonify(
             {
@@ -633,6 +668,8 @@ def api_promise_reply():
                 "extraction_confidence": extraction["confidence"],
                 "ambiguous": extraction["ambiguous"],
                 "clarification_needed": extraction["clarification_needed"],
+                "guardrail_status": guardrail_result["guardrail_status"],
+                "reschedule": reschedule_result,
             }
         ),
         200,

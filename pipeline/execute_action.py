@@ -28,12 +28,13 @@ from __future__ import annotations
 
 import csv
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import razorpay_client
+from guardrails import IST
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PENDING_RETRIES_PATH = BASE_DIR / "logs" / "pending_retries.csv"
@@ -151,3 +152,111 @@ def execute_action(case: dict, final_action: str, action_scheduled_for: str | No
 
     detail = f"Unrecognized final_action={final_action!r} -- no action taken."
     return _result("not_applicable", "none", detail, timestamp)
+
+
+# --------------------------------------------------------------------------
+# Phase 14 -- PTP (Promise-to-Pay) reschedule execution.
+#
+# Same "no dedicated Razorpay API for this, a Payment Link is the closest
+# real, callable action" substitution _send_payment_link makes for
+# retry_now/prompt_alt_payment above -- there is no merchant-facing
+# "reschedule this promise" endpoint either, so a fresh Payment Link is
+# created with expire_by set to the end of the customer's promised day
+# (IST), and its id is what gets stored back onto the promise record.
+# --------------------------------------------------------------------------
+
+_PTP_RESCHEDULE_EXPLANATION = (
+    "schedule_ptp_payment_link executed via payment link -- Razorpay has no dedicated "
+    "'reschedule a promise' API; a fresh Payment Link with expire_by set to end-of-day "
+    "(IST) on the customer's promised date is the closest real, callable action."
+)
+
+
+def _date_to_ist_eod_epoch(date_str: str) -> int:
+    """YYYY-MM-DD -> unix epoch seconds for 23:59:59 IST on that date -- used
+    as payment_link.create's expire_by so the link stays valid through the
+    whole promised day in the customer's own calendar, not the server's UTC
+    one (same IST-local convention guardrails.py's PTP rules already use)."""
+    d = date.fromisoformat(date_str)
+    eod_ist = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=IST)
+    return int(eod_ist.timestamp())
+
+
+def execute_promise_reschedule(case: dict, promise: dict, guardrail_result: dict) -> dict:
+    """Executes a guardrail-APPROVED promise-to-pay date by creating a real
+    Razorpay Payment Link (client.payment_link.create), the same API call
+    _send_payment_link makes above, just with expire_by anchored to the
+    promised date instead of amount/description alone.
+
+    case: case-shaped dict for promise["case_id"] -- amount is required;
+    customer_name/email/contact are used opportunistically if present, same
+    as _send_payment_link. promise: a pipeline.promise_store row (must
+    include promise_id, case_id, extracted_date). guardrail_result:
+    guardrails.apply_ptp_guardrails' output for this promise.
+
+    Only ever called for guardrail_status == "approved" -- rejected /
+    pending_clarification promises must route to human review or a
+    clarification reply instead (the caller's decision, see
+    webhook_receiver.py's /api/promise-reply). This function still refuses
+    to run for anything else (raises ValueError) as a second, defensive
+    check against a caller-side routing bug -- it must never silently
+    schedule a payment link for a promise the guardrails did not approve.
+
+    Returns {execution_status, execution_mechanism, execution_detail,
+    execution_timestamp, payment_link_id} -- payment_link_id is None on
+    failure. Past the guardrail-status check, this never raises: any
+    Razorpay SDK/network failure is caught and returned as
+    execution_status="failed", same contract as _send_payment_link (a failed
+    execution must show up as a logged failure, never a crash or a
+    false-positive success).
+    """
+    guardrail_status = guardrail_result.get("guardrail_status")
+    if guardrail_status != "approved":
+        raise ValueError(
+            f"execute_promise_reschedule called with guardrail_status={guardrail_status!r} for "
+            f"promise_id={promise.get('promise_id')!r} -- only 'approved' promises may be scheduled; "
+            "rejected/pending_clarification promises must route to human review or a clarification "
+            "reply instead, never to this function."
+        )
+
+    timestamp = _now()
+    extracted_date = promise.get("extracted_date")
+
+    try:
+        client = razorpay_client.get_client()
+        amount_paise = int(round(float(case["amount"]) * 100))
+        payload = {
+            "amount": amount_paise,
+            "currency": "INR",
+            "description": f"Promise-to-pay reschedule for case {promise['case_id']} (promised {extracted_date})",
+            "customer": {
+                "name": case.get("customer_name") or "Customer",
+                "email": case.get("email") or "",
+                "contact": case.get("contact") or "",
+            },
+            "notify": {"sms": bool(case.get("contact")), "email": bool(case.get("email"))},
+            # promise_id alone (a UUID4, 36 chars) -- Razorpay caps reference_id at
+            # 40 chars, which "{case_id}:{promise_id}" can exceed; promise_id is
+            # already globally unique on its own (see promise_store.create_promise).
+            "reference_id": promise["promise_id"],
+            "expire_by": _date_to_ist_eod_epoch(extracted_date),
+        }
+        link = client.payment_link.create(payload)
+        link_id = link.get("id")
+        detail = f"{_PTP_RESCHEDULE_EXPLANATION} payment_link_id={link_id} short_url={link.get('short_url')}"
+        return {
+            "execution_status": "success",
+            "execution_mechanism": f"payment_link_created:{link_id}",
+            "execution_detail": detail,
+            "execution_timestamp": timestamp,
+            "payment_link_id": link_id,
+        }
+    except Exception as exc:  # noqa: BLE001 -- any SDK/network failure must degrade to a logged failure, not crash
+        detail = f"{_PTP_RESCHEDULE_EXPLANATION} payment_link creation FAILED: {type(exc).__name__}: {exc}"
+        return {
+            "execution_status": "failed",
+            "execution_mechanism": f"execution_failed:{type(exc).__name__}: {exc}",
+            "execution_detail": detail,
+            "execution_timestamp": timestamp,
+            "payment_link_id": None,
+        }
