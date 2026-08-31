@@ -359,6 +359,7 @@ def run_promise_reschedule(
 
     if execution_result["execution_status"] == "success":
         promise_store.update_promise_payment_link(promise_id, execution_result["payment_link_id"])
+        promise_store.update_promise_status(promise_id, promise_store.STATUS_SCHEDULED)
     else:
         promise_store.mark_promise_reschedule_failed(promise_id)
 

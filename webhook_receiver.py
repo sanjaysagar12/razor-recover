@@ -517,6 +517,10 @@ PROMISE_LOG_PATH = LOGS_DIR / "promise_log.csv"
 PROMISE_LOG_COLUMNS = [
     "timestamp", "case_id", "customer_id", "promise_id", "message", "outcome",
     "extracted_date", "extraction_confidence", "ambiguous", "clarification_needed", "model_version",
+    # Phase 15 -- clarification-loop state, logged on every promise-related
+    # row (not just the final outcome) so a reviewer can read the full
+    # ask-again-or-give-up history for a case_id from this one file.
+    "clarification_round", "status", "fallback_mechanism",
 ]
 
 
@@ -527,6 +531,9 @@ def _append_promise_log(
     message: str,
     outcome: str,
     extraction: dict | None = None,
+    clarification_round: int = 0,
+    status: str | None = None,
+    fallback_mechanism: str | None = None,
 ) -> None:
     PROMISE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     extraction = extraction or {}
@@ -542,6 +549,9 @@ def _append_promise_log(
         "ambiguous": extraction.get("ambiguous"),
         "clarification_needed": extraction.get("clarification_needed"),
         "model_version": extraction.get("model_version"),
+        "clarification_round": clarification_round,
+        "status": status,
+        "fallback_mechanism": fallback_mechanism,
     }
     # PROMISE_LOG_COLUMNS grew five extraction columns beyond the pre-existing
     # 6-column file this repo already shipped -- reindex any rows written
@@ -585,6 +595,92 @@ def _promise_date_case_context(case_id: str) -> dict:
     return context
 
 
+# --------------------------------------------------------------------------
+# Phase 15 -- clarification loop. When Phase 10's extraction is ambiguous or
+# below guardrails.PTP_CONFIDENCE_FLOOR, don't guess and don't run PTP
+# guardrails at all -- ask the customer to clarify instead, capped at
+# promise_store.MAX_CLARIFICATION_ROUNDS rounds, then fall back automatically.
+#
+# Each customer reply gets its own fresh promise row (promise_store.
+# create_promise runs before extraction on every /api/promise-reply call --
+# see the Phase 11 docstring above), so the running clarification_round for
+# a case_id is read off the PRIOR row for that case (get_latest_promise_for_case),
+# never off this reply's own row, which always starts at clarification_round=0.
+# --------------------------------------------------------------------------
+DEFAULT_CLARIFICATION_FOLLOW_UP = "Could you give me a specific date, like 'the 5th' or 'next Friday'?"
+
+
+def _resolve_fallback_schedule(case_id: str) -> tuple[str, str]:
+    """Phase 15 fallback scheduling, used once the clarification cap is hit.
+
+    Tries a pattern-based retry-time predictor module first -- none exists
+    anywhere under pipeline/ as of this phase (searched for
+    retry_time_predictor.py or similar; see pipeline/customer_history.py's
+    own note that no per-customer day/time pattern store exists either) --
+    and only degrades to a fixed 24-hours-from-now default when no such
+    module is importable. Returns (scheduled_for_iso, fallback_mechanism);
+    the mechanism string is "predictor" or "fixed_default_24h" so the audit
+    trail never conflates a real prediction with the hardcoded default, per
+    Phase 15's brief.
+    """
+    try:
+        import retry_time_predictor  # type: ignore  # noqa: F401 -- optional module, may not exist
+    except ImportError:
+        scheduled_for = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        return scheduled_for, "fixed_default_24h"
+
+    scheduled_for = retry_time_predictor.predict_retry_time(case_id)
+    return scheduled_for, "predictor"
+
+
+def _handle_promise_clarification(case_id: str, promise_id: str, extraction: dict) -> dict:
+    """Runs the clarification-loop branch for one ambiguous/low-confidence
+    reply. Never calls guardrails.apply_ptp_guardrails -- an unresolved
+    extraction has nothing for the PTP rules to check yet.
+
+    Returns a dict always containing status/clarification_round; also
+    follow_up_message when status is 'clarifying', or fallback_mechanism +
+    fallback (a {scheduled_for, fallback_mechanism} dict) when status is
+    'fallback'.
+    """
+    prior = promise_store.get_latest_promise_for_case(case_id, exclude_promise_id=promise_id)
+    previous_round = prior["clarification_round"] if prior else 0
+
+    if previous_round < promise_store.MAX_CLARIFICATION_ROUNDS:
+        new_round = previous_round + 1
+        promise_store.update_promise_clarification(promise_id, new_round, promise_store.STATUS_CLARIFYING)
+        follow_up_message = extraction.get("clarification_needed") or DEFAULT_CLARIFICATION_FOLLOW_UP
+        logger.info(
+            "case_id=%s promise_id=%s: clarification round %d/%d -- asking follow-up: %r",
+            case_id, promise_id, new_round, promise_store.MAX_CLARIFICATION_ROUNDS, follow_up_message,
+        )
+        return {
+            "status": promise_store.STATUS_CLARIFYING,
+            "clarification_round": new_round,
+            "follow_up_message": follow_up_message,
+        }
+
+    # Cap already reached on a prior reply -- stop asking, fall back
+    # automatically instead. clarification_round is pinned at the cap, never
+    # incremented further, so it cannot exceed MAX_CLARIFICATION_ROUNDS
+    # regardless of how many more vague replies arrive for this case_id.
+    scheduled_for, fallback_mechanism = _resolve_fallback_schedule(case_id)
+    promise_store.update_promise_clarification(
+        promise_id, promise_store.MAX_CLARIFICATION_ROUNDS, promise_store.STATUS_FALLBACK
+    )
+    promise_store.mark_promise_no_reply(promise_id)
+    logger.info(
+        "case_id=%s promise_id=%s: clarification cap (%d) reached -- falling back via %s scheduled_for=%s",
+        case_id, promise_id, promise_store.MAX_CLARIFICATION_ROUNDS, fallback_mechanism, scheduled_for,
+    )
+    return {
+        "status": promise_store.STATUS_FALLBACK,
+        "clarification_round": promise_store.MAX_CLARIFICATION_ROUNDS,
+        "fallback_mechanism": fallback_mechanism,
+        "fallback": {"scheduled_for": scheduled_for, "fallback_mechanism": fallback_mechanism},
+    }
+
+
 @app.route("/api/promise-reply", methods=["POST"])
 def api_promise_reply():
     body = request.get_json(silent=True)
@@ -622,8 +718,54 @@ def api_promise_reply():
         promise_id, extraction["extracted_date"], extraction["confidence"], extraction["ambiguous"]
     )
 
-    outcome = promise_store.OUTCOME_AMBIGUOUS if extraction["ambiguous"] else promise_store.OUTCOME_PENDING
-    _append_promise_log(case_id, customer_id, promise_id, message, outcome, extraction)
+    # Phase 15 -- an ambiguous or below-PTP_CONFIDENCE_FLOOR extraction never
+    # reaches guardrails at all; it goes through the clarification loop
+    # instead (ask again, capped at MAX_CLARIFICATION_ROUNDS, then fall
+    # back automatically). Only a clean extraction (a date, confident,
+    # unambiguous) proceeds to guardrails -- exactly Phase 11-14's existing
+    # behavior, unchanged below.
+    is_clean_extraction = (
+        extraction["extracted_date"] is not None
+        and extraction["confidence"] >= guardrails.PTP_CONFIDENCE_FLOOR
+        and not extraction["ambiguous"]
+    )
+
+    if not is_clean_extraction:
+        clarification_result = _handle_promise_clarification(case_id, promise_id, extraction)
+        outcome = (
+            promise_store.OUTCOME_NO_REPLY
+            if clarification_result["status"] == promise_store.STATUS_FALLBACK
+            else promise_store.OUTCOME_AMBIGUOUS
+        )
+        _append_promise_log(
+            case_id, customer_id, promise_id, message, outcome, extraction,
+            clarification_round=clarification_result["clarification_round"],
+            status=clarification_result["status"],
+            fallback_mechanism=clarification_result.get("fallback_mechanism"),
+        )
+        return (
+            jsonify(
+                {
+                    "promise_id": promise_id,
+                    "status": clarification_result["status"],
+                    "extracted_date": extraction["extracted_date"],
+                    "extraction_confidence": extraction["confidence"],
+                    "ambiguous": extraction["ambiguous"],
+                    "clarification_needed": extraction["clarification_needed"],
+                    "clarification_round": clarification_result["clarification_round"],
+                    "follow_up_message": clarification_result.get("follow_up_message"),
+                    "fallback": clarification_result.get("fallback"),
+                }
+            ),
+            200,
+        )
+
+    outcome = promise_store.OUTCOME_PENDING
+    # status starts at 'pending' here and is only ever raised to a more
+    # final value below (requires_human_review / scheduled) -- the log row
+    # appended after this block reflects whichever one actually applied, not
+    # a stale 'pending' snapshot taken before guardrails/execution ran.
+    final_status = promise_store.STATUS_PENDING
 
     # Phase 14 -- run the extraction through the Phase 13 PTP guardrails and,
     # only when they approve it, execute the reschedule (create the Razorpay
@@ -635,6 +777,9 @@ def api_promise_reply():
     # calling run_case.run_promise_reschedule at all.
     guardrail_result = guardrails.apply_ptp_guardrails(case_context, extraction)
     promise_store.update_promise_guardrail(promise_id, guardrail_result["guardrail_status"])
+    if guardrail_result.get("requires_human_review"):
+        final_status = promise_store.STATUS_REQUIRES_HUMAN_REVIEW
+        promise_store.update_promise_status(promise_id, final_status)
     logger.info(
         "Promise guardrail verdict: promise_id=%s case_id=%s guardrail_status=%s final_action=%s "
         "guardrail_flags=%s requires_human_review=%s routed_to_clarification=%s",
@@ -658,6 +803,13 @@ def api_promise_reply():
             "execution_status": reschedule_row["execution_status"],
             "execution_mechanism": reschedule_row["execution_mechanism"],
         }
+        if reschedule_row["execution_status"] == "success":
+            final_status = promise_store.STATUS_SCHEDULED
+
+    _append_promise_log(
+        case_id, customer_id, promise_id, message, outcome, extraction,
+        clarification_round=0, status=final_status,
+    )
 
     return (
         jsonify(
