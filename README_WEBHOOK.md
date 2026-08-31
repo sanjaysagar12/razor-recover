@@ -138,6 +138,104 @@ creation.
   will show `network_retry_cap_exceeded` instead of isolating the
   confidence-floor path.
 
+### Internal-shape vs. Razorpay-shape triggers
+
+The dashboard's custom-trigger panel can POST two different body shapes, to
+two different endpoints. Both end up running the exact same pipeline
+(`confidence_gate -> shap_extract -> llm_layer -> guardrails ->
+execute_action`), but they start from opposite ends of it:
+
+| | `/api/trigger-test-case` ("internal shape") | `/api/trigger-webhook-shaped` ("Razorpay shape") |
+|---|---|---|
+| Body | Already a pipeline case dict — `{"event_type": ..., "case": {"decline_code": ..., "ltv_tier": ..., ...}}` | A full Razorpay webhook envelope — `{"entity": "event", "event": ..., "payload": {"payment": {"entity": {...}}}, ...}`, same shape `test_webhook_locally.py`'s `SAMPLE_PAYMENT_FAILED` uses |
+| What builds the case dict | `webhook_receiver._build_manual_test_case()` — merges your `case` object directly onto `DEFAULT_TEST_CASE` | `webhook_receiver.map_payload_to_case()` — the SAME function the real `/webhook/razorpay` route uses |
+| What you control | Every field on the case, exactly, as a literal value | Only what a real Razorpay webhook actually contains (`error_reason`, `amount` in paise, `method`, `customer_id`, ...) |
+| Why it exists | Precise guardrail-rule targeting for the 5 presets below — several rules need an exact combination of field values that a real webhook can never carry (see next section) | Exercises the real mapping code path end-to-end, the same one production traffic runs through |
+
+Both write `source=manual_test` and force the `manual_test_` case-id prefix,
+same rate limit, same audit log — the only difference is which function
+builds the case dict.
+
+#### Where the conversion happens, and why some fields can't be set
+
+`map_payload_to_case()` (`webhook_receiver.py`) is the one place a Razorpay
+envelope becomes a case dict shaped like `/api/trigger-test-case`'s `case`
+object. Every field on that case dict is filled in by one of three
+mechanisms, and only the first one is something a webhook payload can
+actually influence:
+
+1. **Calculated from a field the webhook payload really has.** A lookup
+   table or a unit conversion, nothing more.
+   - `decline_code` ← `RAZORPAY_REASON_TO_DECLINE_CODE[error_reason]`
+   - `decline_code_bucket` / `decline_code_is_ambiguous` ←
+     `decline_code_mapper.map_razorpay_error_reason(error_reason)` — falls
+     back to `AMBIGUOUS` for any `error_reason` not in that module's
+     explicit list (real Razorpay error reasons are a much larger
+     vocabulary than the model's training taxonomy covers)
+   - `amount` ← `payload.payment.entity.amount / 100` (paise → rupees)
+   - `payment_rail` ← `PAYMENT_METHOD_TO_RAIL[method]`
+   - `retry_attempt_number` ← `payload.subscription.entity.paid_count`,
+     defaulting to `1` if there's no subscription entity at all (true for
+     every plain `payment.failed` event, which is most of them)
+
+2. **Looked up from a database the webhook payload never mentions**,
+   keyed only by `customer_id`. This is the one that surprises people —
+   these fields exist *nowhere* in a Razorpay webhook; they're the
+   system's own memory of that customer, built from every past event
+   tied to that same ID:
+   - `ltv_tier`, `historical_ptp_honor_rate`, `customer_tenure_days`,
+     `prior_retry_success_count` ← `customer_history.get_or_create_customer(customer_key)`.
+     A `customer_id` the system has never seen returns fixed neutral
+     defaults (`medium` / `0.5` / `0` / `0`) — never anything you wrote in
+     the webhook body, because there's nowhere in the body to write it.
+   - `current_risk_tier` ← `customer_ptp_stats.get_risk_tier(customer_id)`,
+     a separate database, same idea.
+
+3. **A hardcoded constant.** No source at all, real webhook or not —
+   every single case gets the same value:
+   - `issuer_bank_risk_tier` = `"medium_risk"` (`DEFAULT_ISSUER_BANK_RISK_TIER`)
+   - `amount_vs_historical_avg` = `1.0` (`DEFAULT_AMOUNT_VS_HISTORICAL_AVG`)
+   - `hours_since_last_attempt` = `24.0` (`DEFAULT_HOURS_SINCE_LAST_ATTEMPT`)
+
+`/api/trigger-test-case`'s `case` object skips all three mechanisms and
+lets you write the *end result* directly — as if the lookup and the
+calculation had already happened and landed on exactly the number you
+wanted. That's the entire reason it exists alongside the Razorpay-shaped
+endpoint, not instead of it.
+
+**Worked example** — POSTing this to `/api/trigger-webhook-shaped`:
+
+```json
+{
+  "event": "payment.failed",
+  "payload": { "payment": { "entity": {
+    "amount": 66242, "method": "upi", "customer_id": "cust_dashboard_example",
+    "error_reason": "issuer_unavailable"
+  } } }
+}
+```
+
+does **not** produce `decline_code: "stolen_card"`, `payment_rail: "card"`,
+`ltv_tier: "high"`, etc. no matter how those fields look in some
+`/api/trigger-test-case` example — it produces `decline_code:
+"issuer_unavailable"`, `decline_code_bucket: "AMBIGUOUS"` (that reason isn't
+in `decline_code_mapper`'s table), `amount: 662.42`, `payment_rail:
+"upi_autopay"`, and whatever `ltv_tier`/`historical_ptp_honor_rate`/etc.
+`cust_dashboard_example` happens to have accumulated in
+`data/customer_history.db` from past triggers (neutral defaults the first
+time; drifting after that — unlike `/api/trigger-test-case`, which gives
+the identical case every time).
+
+#### Which presets can move to the Razorpay-shaped endpoint
+
+| Preset | Reproducible via `/api/trigger-webhook-shaped`? | Why |
+|---|---|---|
+| Hard decline override | Yes | `hard_decline_excluded` checks `decline_code` (bucket 1, settable via `error_reason: "stolen_card"`), not `decline_code_bucket` — the guardrail outcome matches even though `decline_code_bucket` itself will read `AMBIGUOUS` instead of `CLEAR_HARD` |
+| NPCI retry cap exceeded | Yes | `method: "upi"` + `payload.subscription.entity.paid_count: 4` reaches both `payment_rail="upi_autopay"` and `retry_attempt_number=4` |
+| Peak execution window block | Yes | Already non-deterministic either way — depends only on the LLM's own chosen time, not on anything in the case shape |
+| Confidence floor breach | **No** | Needs `ltv_tier`/`historical_ptp_honor_rate`/`customer_tenure_days`/`prior_retry_success_count` pinned to specific values — bucket 2 fields, only settable by accumulating real history for one `customer_id` over many actual events, not in one request |
+| Malformed LLM output | **No** | Needs the internal-only `_force_malformed_llm` flag, which `map_payload_to_case()` structurally never sets (see `run_case.MalformedTestAdapter`'s own docstring) — there is no field in a Razorpay envelope for it |
+
 ## Running the local signature test
 
 With `webhook_receiver.py` running in one terminal:

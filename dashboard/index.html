@@ -154,6 +154,17 @@
     background: #0b0f19; border: 1px solid var(--border); border-radius: 8px; padding: 10px;
     font-size: 11px; max-height: 260px; overflow: auto; white-space: pre-wrap; margin: 0;
   }
+  .ptp-banner {
+    border-radius: 8px; padding: 8px 12px; font-size: 12.5px; font-weight: 600; margin-bottom: 12px;
+  }
+  .ptp-banner.scheduled { background: rgba(52,201,143,.15); color: var(--green); border: 1px solid rgba(52,201,143,.3); }
+  .ptp-banner.fallback { background: rgba(232,177,59,.15); color: var(--amber); border: 1px solid rgba(232,177,59,.3); }
+  .ptp-banner.awaiting { background: rgba(154,164,189,.12); color: var(--text-dim); border: 1px solid var(--border); }
+  .ptp-banner.review { background: rgba(239,90,111,.15); color: var(--red); border: 1px solid rgba(239,90,111,.3); }
+  .ptp-history { width: 100%; font-size: 12px; border-collapse: collapse; margin-bottom: 12px; }
+  .ptp-history td { padding: 5px 8px; border-bottom: 1px solid #1e2637; vertical-align: top; }
+  .ptp-history td.msg { max-width: 260px; }
+  .ptp-history .meta { color: var(--text-dim); font-size: 10.5px; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -164,6 +175,7 @@
     <div class="sub">Live pipeline decisions + webhook transport log</div>
   </div>
   <div class="controls">
+    <a href="/conversations" style="color: var(--accent); text-decoration: none; font-weight: 600;">Customer Conversations &rarr;</a>
     <span id="lastUpdated">not yet loaded</span>
     <label><input type="checkbox" id="pauseToggle"> pause auto-refresh</label>
     <label><input type="checkbox" id="resetCustomerHistoryToggle"> also reset customer history</label>
@@ -180,6 +192,10 @@
 
     <details class="custom-trigger" style="margin-top:16px">
       <summary>Custom trigger (raw JSON payload)</summary>
+      <div class="row" style="margin-top:10px">
+        <label class="sub"><input type="radio" name="customShape" id="shapeInternal" value="internal" checked> Internal shape (precise guardrail targeting -- /api/trigger-test-case)</label>
+        <label class="sub"><input type="radio" name="customShape" id="shapeRazorpay" value="razorpay"> Real Razorpay shape (exercises map_payload_to_case -- /api/trigger-webhook-shaped)</label>
+      </div>
       <textarea id="customPayload" spellcheck="false"></textarea>
       <div class="row">
         <button class="primary" id="customTriggerBtn">Trigger custom case</button>
@@ -265,6 +281,7 @@ const AUDIT_COLS = [
   'case_id', 'timestamp', 'source', 'decline_code', 'decline_code_bucket', 'amount', 'tree_model_score',
   'routed_to_llm', 'proposed_action', 'final_action', 'guardrail_overrode', 'override_rule',
   'requires_human_review', 'guardrail_flags', 'execution_status', 'execution_mechanism', 'customer_history_source',
+  'ptp_offer', 'ptp_status',
 ];
 const WEBHOOK_COLS = ['timestamp', 'event_type', 'signature_valid', 'case_id', 'outcome', 'error_detail'];
 
@@ -272,6 +289,32 @@ function boolBadge(v) {
   if (v === true || v === 'True' || v === 'true') return '<span class="badge true">true</span>';
   if (v === false || v === 'False' || v === 'false') return '<span class="badge false">false</span>';
   return escapeHtml(v);
+}
+
+// -- PTP offer-eligibility badge (pipeline/ptp_trigger.should_offer_ptp) --
+// Short human labels for each trigger_category -- the raw category string
+// is still available as the badge's title tooltip alongside the full
+// reason sentence, so nothing is lost, just kept off the main row.
+const PTP_TRIGGER_LABELS = {
+  retry_failed_once: 'retry failed once',
+  hard_decline: 'hard decline',
+  open_promise_exists: 'open promise exists',
+  restricted_tier: 'restricted tier',
+  insufficient_funds_code: 'insufficient funds code',
+  approaching_retry_cap: 'approaching retry cap',
+  high_ltv_first_failure: 'high LTV, first failure',
+  first_failure_awaiting_auto_retry: 'first failure, awaiting auto-retry',
+};
+
+function ptpOfferBadge(row) {
+  const category = row.ptp_trigger_category;
+  if (!category) return '<span class="sub">--</span>'; // gate never ran for this row (recovered-case / reschedule rows)
+  const label = PTP_TRIGGER_LABELS[category] || category;
+  const offered = row.ptp_offer_decision === true || row.ptp_offer_decision === 'True';
+  const cls = offered ? 'true' : 'false';
+  const text = (offered ? 'PTP offered -- ' : 'PTP not offered -- ') + label;
+  const tooltip = `${category}: ${row.ptp_offer_reason || ''}`;
+  return `<span class="badge ${cls}" title="${escapeHtml(tooltip)}">${escapeHtml(text)}</span>`;
 }
 
 function renderTable(tableId, cols, rows, clickable) {
@@ -294,6 +337,14 @@ function renderTable(tableId, cols, rows, clickable) {
       }
       if (c === 'source' && v === 'manual_test') {
         return `<td><span class="badge manual">manual_test</span></td>`;
+      }
+      if (c === 'ptp_offer') {
+        return `<td>${ptpOfferBadge(row)}</td>`;
+      }
+      if (c === 'ptp_status') {
+        const isScheduled = typeof v === 'string' && v.startsWith('Scheduled for:');
+        const color = isScheduled ? 'var(--green)' : 'var(--text-dim)';
+        return `<td title="${escapeHtml(v)}" style="color:${color}">${escapeHtml(v)}</td>`;
       }
       return `<td title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
     }).join('');
@@ -387,10 +438,10 @@ document.getElementById('resetLogsBtn').addEventListener('click', async () => {
 });
 
 // -- Trigger (presets + custom) ------------------------------------------
-async function triggerCase(payload, btn) {
+async function triggerCase(payload, btn, endpoint) {
   if (btn) btn.disabled = true;
   try {
-    const resp = await apiFetch('/api/trigger-test-case', {
+    const resp = await apiFetch(endpoint || '/api/trigger-test-case', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
     const data = await resp.json();
@@ -422,6 +473,8 @@ const PRESETS = [
       amount: 1200, retry_attempt_number: 1, payment_rail: 'card', ltv_tier: 'high',
       historical_ptp_honor_rate: 0.9, customer_tenure_days: 1000, prior_retry_success_count: 3,
       issuer_bank_risk_tier: 'low_risk', amount_vs_historical_avg: 1.0, hours_since_last_attempt: 2,
+      email: 'hard.decline.demo@example.com', contact: '9123456781',
+      customer_id: 'cust_hard_decline_demo', customer_key: 'cust_hard_decline_demo',
     }},
   },
   {
@@ -432,6 +485,8 @@ const PRESETS = [
       amount: 800, retry_attempt_number: 4, payment_rail: 'upi_autopay', ltv_tier: 'high',
       historical_ptp_honor_rate: 0.9, customer_tenure_days: 900, prior_retry_success_count: 3,
       issuer_bank_risk_tier: 'low_risk', amount_vs_historical_avg: 1.0, hours_since_last_attempt: 2,
+      email: 'npci.cap.demo@example.com', contact: '9123456782',
+      customer_id: 'cust_npci_cap_demo', customer_key: 'cust_npci_cap_demo',
     }},
   },
   {
@@ -448,6 +503,8 @@ const PRESETS = [
       historical_ptp_honor_rate: 0.55, customer_tenure_days: 400, prior_retry_success_count: 1,
       issuer_bank_risk_tier: 'medium_risk', amount_vs_historical_avg: 1.0, hours_since_last_attempt: 12,
       is_peak_execution_window: true,
+      email: 'peak.window.demo@example.com', contact: '9123456783',
+      customer_id: 'cust_peak_window_demo', customer_key: 'cust_peak_window_demo',
     }},
   },
   {
@@ -462,6 +519,8 @@ const PRESETS = [
       amount: 500, retry_attempt_number: 2, payment_rail: 'card', ltv_tier: 'low',
       historical_ptp_honor_rate: 0.05, customer_tenure_days: 10, prior_retry_success_count: 0,
       issuer_bank_risk_tier: 'high_risk', amount_vs_historical_avg: 2.5, hours_since_last_attempt: 1,
+      email: 'confidence.floor.demo@example.com', contact: '9123456784',
+      customer_id: 'cust_confidence_floor_demo', customer_key: 'cust_confidence_floor_demo',
     }},
   },
   {
@@ -477,9 +536,17 @@ const PRESETS = [
       historical_ptp_honor_rate: 0.5, customer_tenure_days: 300, prior_retry_success_count: 1,
       issuer_bank_risk_tier: 'medium_risk', amount_vs_historical_avg: 1.0, hours_since_last_attempt: 5,
       _force_malformed_llm: true,
+      email: 'malformed.llm.demo@example.com', contact: '9123456785',
+      customer_id: 'cust_malformed_llm_demo', customer_key: 'cust_malformed_llm_demo',
     }},
   },
 ];
+// Every preset above carries its own email+customer_id (purely additive --
+// customer_directory.record_customer_contact only reads email/contact/
+// customer_key, never any guardrail-relevant field, so none of the
+// guardrail-targeting field values above changed) -- any of them is now
+// also visible on the Customer Conversations page (/conversations), so a
+// separate no-guardrail-rule "PTP demo" preset is no longer needed.
 
 function renderPresets() {
   const el = document.getElementById('presets');
@@ -494,7 +561,70 @@ function renderPresets() {
 }
 renderPresets();
 
-document.getElementById('customPayload').value = JSON.stringify(PRESETS[0].payload, null, 2);
+// Real-Razorpay-shape example -- same envelope structure
+// test_webhook_locally.py's SAMPLE_PAYMENT_FAILED uses (Phase 21). Posted to
+// /api/trigger-webhook-shaped, which runs it through the actual
+// map_payload_to_case() mapper instead of the internal-shape shortcut above.
+function buildRazorpayShapeExample() {
+  return {
+    entity: 'event',
+    account_id: 'acc_test000000000001',
+    event: 'payment.failed',
+    contains: ['payment'],
+    payload: {
+      payment: {
+        entity: {
+          id: 'pay_dashboard_example_' + Date.now(),
+          entity: 'payment',
+          amount: 66242,
+          currency: 'INR',
+          status: 'failed',
+          method: 'upi',
+          vpa: 'test@upi',
+          email: 'dashboard.example@example.com',
+          contact: '+919999999999',
+          customer_id: 'cust_dashboard_example',
+          error_code: 'BAD_REQUEST_ERROR',
+          error_description: 'Payment failed due to issuer unavailability',
+          error_source: 'issuer',
+          error_step: 'payment_authorization',
+          error_reason: 'issuer_unavailable',
+          created_at: Math.floor(Date.now() / 1000),
+        },
+      },
+    },
+    created_at: Math.floor(Date.now() / 1000),
+  };
+}
+
+// Keeps each shape's own draft so switching the radio and back doesn't lose
+// manual edits made in either mode.
+let internalShapeDraft = JSON.stringify(PRESETS[0].payload, null, 2);
+let razorpayShapeDraft = null;
+
+document.getElementById('customPayload').value = internalShapeDraft;
+
+function currentShape() {
+  return document.getElementById('shapeRazorpay').checked ? 'razorpay' : 'internal';
+}
+
+function saveCurrentDraft(shape) {
+  const value = document.getElementById('customPayload').value;
+  if (shape === 'razorpay') razorpayShapeDraft = value; else internalShapeDraft = value;
+}
+
+[document.getElementById('shapeInternal'), document.getElementById('shapeRazorpay')].forEach(radio => {
+  radio.addEventListener('change', (e) => {
+    const previousShape = e.target.value === 'razorpay' ? 'internal' : 'razorpay';
+    saveCurrentDraft(previousShape);
+    const textarea = document.getElementById('customPayload');
+    if (currentShape() === 'razorpay') {
+      textarea.value = razorpayShapeDraft ?? JSON.stringify(buildRazorpayShapeExample(), null, 2);
+    } else {
+      textarea.value = internalShapeDraft;
+    }
+  });
+});
 
 document.getElementById('customTriggerBtn').addEventListener('click', async () => {
   const raw = document.getElementById('customPayload').value;
@@ -509,7 +639,8 @@ document.getElementById('customTriggerBtn').addEventListener('click', async () =
     validationEl.style.color = 'var(--red)';
     return;
   }
-  const data = await triggerCase(payload, document.getElementById('customTriggerBtn'));
+  const endpoint = currentShape() === 'razorpay' ? '/api/trigger-webhook-shaped' : '/api/trigger-test-case';
+  const data = await triggerCase(payload, document.getElementById('customTriggerBtn'), endpoint);
   responseEl.style.display = 'block';
   responseEl.textContent = JSON.stringify(data, null, 2);
 });
@@ -534,11 +665,52 @@ function renderShapTable(jsonStr) {
   return `<table class="shap-table"><tr><td><b>feature</b></td><td><b>value</b></td><td><b>shap_value</b></td></tr>${rows}</table>`;
 }
 
+// -- PTP status banner + reply history (persisted, from pipeline/promise_store.py's
+// `promises` table via /api/case-detail's `promises` field -- distinct from
+// the one-line transient status sendPromiseReply() shows right after a
+// send, which disappears the moment the modal is closed/reopened). --------
+function ptpOutcome(promise) {
+  const o = promise.scheduled_outcome || {};
+  if (o.kind === 'scheduled') return { kind: 'scheduled', text: `Scheduled for: ${o.scheduled_for}` };
+  if (o.kind === 'fallback') return { kind: 'fallback', text: `Fallback: automatic scheduling, scheduled ${o.scheduled_for || '--'}` };
+  if (o.kind === 'requires_human_review') return { kind: 'review', text: `Flagged for human review (guardrail_status=${promise.guardrail_status || 'n/a'})` };
+  if (o.kind === 'reschedule_failed') return { kind: 'review', text: `Guardrail approved (date ${o.extracted_date || '--'}) but scheduling failed -- see log trace below` };
+  if (promise.status === 'clarifying') return { kind: 'awaiting', text: `Awaiting clarification (round ${promise.clarification_round})` };
+  return { kind: 'awaiting', text: 'Awaiting reply' };
+}
+
+function renderPtpBanner(promises) {
+  if (!promises.length) {
+    return `<div class="ptp-banner awaiting">Awaiting reply</div>`;
+  }
+  const latest = promises[promises.length - 1];
+  const outcome = ptpOutcome(latest);
+  return `<div class="ptp-banner ${outcome.kind}">${escapeHtml(outcome.text)}</div>`;
+}
+
+function renderPtpHistory(promises) {
+  if (!promises.length) return '';
+  const rows = promises.map(p => `
+    <tr>
+      <td class="msg">${escapeHtml(p.message)}<div class="meta">${escapeHtml(new Date(p.created_at).toLocaleString())}</div></td>
+      <td>${p.extracted_date ? escapeHtml(p.extracted_date) : '--'}${p.extraction_confidence != null ? `<div class="meta">confidence ${p.extraction_confidence}</div>` : ''}</td>
+      <td>${escapeHtml(p.guardrail_status) || '--'}</td>
+      <td>${escapeHtml(p.status)}</td>
+    </tr>
+  `).join('');
+  return `<table class="ptp-history">
+    <tr><td><b>message</b></td><td><b>extracted_date</b></td><td><b>guardrail_status</b></td><td><b>status</b></td></tr>
+    ${rows}
+  </table>`;
+}
+
 function renderCaseDetail(data) {
   const row = data.audit_row;
   if (!row) {
+    const promises = data.promises || [];
     return `<div class="dhead"><h3>${escapeHtml(data.case_id)}</h3><button class="close-btn" onclick="closeCaseDetail()">&times;</button></div>
       <div class="empty">No audit row found for this case_id (may only exist in the webhook transport log).</div>
+      ${promises.length ? `<div class="dsection"><h4>Reply as customer (promise-to-pay)</h4>${renderPtpBanner(promises)}${renderPtpHistory(promises)}</div>` : ''}
       ${data.log_lines.length ? `<div class="dsection"><h4>Log trace</h4><pre class="detail-log">${escapeHtml(data.log_lines.join('\n'))}</pre></div>` : ''}`;
   }
 
@@ -604,7 +776,9 @@ function renderCaseDetail(data) {
 
     <div class="dsection">
       <h4>Reply as customer (promise-to-pay)</h4>
-      <div class="sub">Sends a raw reply for this case -- stored as-is, not yet parsed into a date or actioned (that's a later phase).</div>
+      <div class="sub" style="margin-bottom:10px">Sends a reply for this case -- parsed into a date, run through PTP guardrails, and (if approved) scheduled as a real payment link.</div>
+      ${renderPtpBanner(data.promises || [])}
+      ${renderPtpHistory(data.promises || [])}
       <div class="row">
         <input type="text" class="chat-input" id="promiseInput" placeholder="e.g. I'll pay on the 5th"
           onkeydown="if(event.key==='Enter'){document.getElementById('promiseSendBtn').click();}">
@@ -669,19 +843,23 @@ async function sendPromiseReply(btn) {
     if (!resp.ok) {
       statusEl.textContent = 'Failed: ' + (data.message || resp.statusText);
       statusEl.style.color = 'var(--red)';
-    } else if (data.ambiguous) {
-      statusEl.textContent = `Received -- no clear date (${data.clarification_needed || 'clarification needed'})`;
-      statusEl.style.color = 'var(--amber)';
-      input.value = '';
-    } else {
-      statusEl.textContent = `Received -- extracted date ${data.extracted_date} (confidence ${data.extraction_confidence})`;
-      statusEl.style.color = 'var(--green)';
-      input.value = '';
+      btn.disabled = false;
+      input.disabled = false;
+      return;
     }
+    if (data.ambiguous) {
+      toast('warn', 'Clarification needed', data.follow_up_message || data.clarification_needed || 'Could you give a specific date?');
+    } else if (data.extracted_date) {
+      toast('ok', 'Reply processed', `extracted date ${data.extracted_date} (confidence ${data.extraction_confidence}) -- guardrail_status=${data.guardrail_status || 'n/a'}`);
+    }
+    // Refetch and re-render the case detail instead of leaving only this
+    // one-line transient status -- the persisted PTP banner/history above
+    // (backed by pipeline/promise_store.py's `promises` table) is what
+    // survives closing and reopening the modal; this status text does not.
+    await showCaseDetail(caseId);
   } catch (e) {
     statusEl.textContent = 'Error: ' + String(e);
     statusEl.style.color = 'var(--red)';
-  } finally {
     btn.disabled = false;
     input.disabled = false;
   }

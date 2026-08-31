@@ -247,6 +247,84 @@ def get_latest_promise_for_case(case_id: str, exclude_promise_id: str | None = N
         return dict(row) if row else None
 
 
+def get_promises_for_case(case_id: str) -> list[dict]:
+    """Every promise row for case_id, oldest first -- Phase 19's conversation-
+    history read API uses this as the source of truth for a case's full
+    reply thread (run_case.py writes lifecycle state -- payment_link_id,
+    STATUS_SCHEDULED, reschedule failures -- directly onto these rows, never
+    to logs/promise_log.csv, which is only webhook_receiver.py's own
+    secondary audit trail and lacks guardrail_status/payment_link_id
+    entirely). Read-only; does not touch get_latest_promise_for_case's
+    newest-first ordering used elsewhere."""
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM promises WHERE case_id = ? ORDER BY created_at ASC",
+            (case_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def has_open_promise(customer_id: str | None) -> bool:
+    """True if customer_id has at least one promise row whose outcome is
+    still 'pending', 'ambiguous', or 'no_reply' -- i.e. NOT YET resolved to
+    'honored'/'broken' (terminal) and not a scheduling attempt that already
+    failed outright via 'reschedule_failed' (a dead end, not something
+    actively awaiting the customer -- a fresh prompt is fine after that).
+    Used by pipeline/ptp_trigger.py's should_offer_ptp() to avoid stacking a
+    second PTP prompt on top of one still in flight.
+
+    Returns False for customer_id=None -- nothing to key the query on, same
+    "no key, nothing to check" convention this module's other
+    customer_id-keyed readers already use (see get_recent_resolved_outcomes)."""
+    if not customer_id:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM promises WHERE customer_id = ? AND outcome IN (?, ?, ?) LIMIT 1",
+            (customer_id, OUTCOME_PENDING, OUTCOME_AMBIGUOUS, OUTCOME_NO_REPLY),
+        ).fetchone()
+        return row is not None
+
+
+def get_latest_promise_status_for_cases(case_ids: list[str]) -> dict[str, dict]:
+    """Bulk version of get_latest_promise_for_case -- one query covering
+    every case_id in case_ids, keeping only the most-recently-created
+    promise row per case_id. Used by webhook_receiver.api_audit_log to
+    annotate each audit-log row with its PTP scheduling state without an
+    N+1 query per row. Returns {} for an empty case_ids list; a case_id with
+    no promise rows is simply absent from the result (never a None value)."""
+    if not case_ids:
+        return {}
+    placeholders = ",".join("?" for _ in case_ids)
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"SELECT * FROM promises WHERE case_id IN ({placeholders}) ORDER BY created_at ASC",
+            case_ids,
+        ).fetchall()
+    latest: dict[str, dict] = {}
+    for row in rows:
+        # Ascending order -- the last write per case_id in this loop is
+        # always the most recently created row, same "last one wins" idiom
+        # as a dict comprehension over a sorted stream.
+        latest[row["case_id"]] = dict(row)
+    return latest
+
+
+def reset_all_promises() -> None:
+    """Deletes every row from promises -- backs the Customer Conversations
+    page's reset button (webhook_receiver.api_reset_conversations). Only
+    this table: customer_history's scoring table lives in the same database
+    file (data/customer_history.db) but is untouched here -- resetting
+    conversation threads must not also erase pipeline scoring state
+    (tenure/ltv/honor-rate). Callers that also want the email<->customer_key
+    directory cleared must call customer_directory.reset_all() separately
+    (see api_reset_conversations, which calls both together)."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM promises")
+
+
 def update_promise_clarification(promise_id: str, clarification_round: int, status: str) -> None:
     """Writes Phase 15's clarification-loop state back onto the row.
     clarification_round and status are always written together (never

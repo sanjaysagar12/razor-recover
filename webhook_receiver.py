@@ -42,6 +42,7 @@ PIPELINE_DIR = BASE_DIR / "pipeline"
 sys.path.insert(0, str(PIPELINE_DIR))
 
 import confidence_gate  # noqa: E402
+import customer_directory  # noqa: E402
 import customer_history  # noqa: E402
 import customer_ptp_stats  # noqa: E402
 import decline_code_mapper  # noqa: E402
@@ -50,6 +51,8 @@ import guardrails  # noqa: E402
 import llm_layer  # noqa: E402
 import promise_store  # noqa: E402
 import ptp_outcomes  # noqa: E402
+import ptp_trigger  # noqa: E402
+import run_batch  # noqa: E402
 import run_case  # noqa: E402
 
 load_dotenv()
@@ -341,6 +344,14 @@ def map_payload_to_case(event: dict) -> dict:
             case_id, customer_key,
         )
 
+    email = payment_entity.get("email")
+    contact = payment_entity.get("contact")
+    # Phase 18 -- fills the email<->customer_key directory from every webhook
+    # call (not just the chat/promise-reply path), so it builds up from real
+    # traffic automatically. No-op, logged, if email or customer_key is None
+    # -- see customer_directory.record_customer_contact's own docstring.
+    customer_directory.record_customer_contact(email, contact, customer_key)
+
     case = {
         "case_id": case_id,
         "decline_code": decline_code,
@@ -359,8 +370,8 @@ def map_payload_to_case(event: dict) -> dict:
         "customer_key": customer_key,
         "customer_history_source": customer_history_source,
         "current_risk_tier": current_risk_tier,
-        "email": payment_entity.get("email"),
-        "contact": payment_entity.get("contact"),
+        "email": email,
+        "contact": contact,
         "guardrail_flags": None,
         **customer_fields,
         "hours_since_last_attempt": DEFAULT_HOURS_SINCE_LAST_ATTEMPT,
@@ -733,6 +744,68 @@ def _handle_promise_clarification(case_id: str, promise_id: str, extraction: dic
     }
 
 
+def _case_facts_for_ptp_gate(case_id: str) -> dict | None:
+    """Reconstructs the subset of the original case dict pipeline/ptp_trigger.
+    should_offer_ptp() needs, read back from case_id's own row in
+    logs/webhook_audit_log.csv -- the ORIGINAL scoring row specifically
+    (.iloc[0], the first row ever written for this case_id), never a later
+    reschedule-audit or PTP-rejection row (run_promise_reschedule and
+    _append_ptp_rejection_audit_row below both leave these fields blank,
+    same as every other run_recovery_case-only column).
+
+    Returns None if case_id has no audit row at all (e.g. the log was reset,
+    or a case_id from before this field was added) -- callers degrade
+    gracefully rather than blocking the reply on a lookup miss, same
+    philosophy as _promise_date_case_context's own best-effort lookup.
+    """
+    if not run_case.WEBHOOK_AUDIT_LOG_PATH.exists():
+        return None
+    df = pd.read_csv(run_case.WEBHOOK_AUDIT_LOG_PATH)
+    match = df[df["case_id"] == case_id]
+    if match.empty:
+        return None
+    row = match.iloc[0]
+    fields = {}
+    for col in ("decline_code", "decline_code_bucket", "decline_code_is_ambiguous",
+                "retry_attempt_number", "ltv_tier", "payment_rail", "cumulative_retries_this_txn"):
+        value = row.get(col)
+        fields[col] = value if pd.notna(value) else None
+    return fields
+
+
+def _append_ptp_rejection_audit_row(case_id: str, customer_id: str, eligibility: dict) -> None:
+    """Logs a rejected PTP reply attempt to logs/webhook_audit_log.csv --
+    per the brief, a reply the pipeline declined to act on is still an
+    event worth an audit row, not just a return value. Reuses run_case's
+    own blank-row/append helpers rather than a second CSV-append
+    mechanism."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    row = run_case.blank_webhook_audit_row()
+    row.update(
+        {
+            "case_id": case_id,
+            "timestamp": now_iso,
+            "routing_rationale": f"PTP reply rejected before LLM extraction -- {eligibility['reason']}",
+            "guardrail_flags": "",
+            "proposed_action": "ptp_reply_rejected",
+            "final_action": "ptp_reply_rejected",
+            "guardrail_overrode": False,
+            "requires_human_review": False,
+            "pipeline_version": run_batch.PIPELINE_VERSION,
+            "customer_key": customer_id,
+            "execution_status": "not_applicable",
+            "execution_mechanism": "none",
+            "execution_detail": f"Reply not processed: {eligibility['reason']}",
+            "execution_timestamp": now_iso,
+            "source": run_case.SOURCE_REAL_WEBHOOK,
+            "ptp_offer_decision": eligibility["offer_ptp"],
+            "ptp_trigger_category": eligibility["trigger_category"],
+            "ptp_offer_reason": eligibility["reason"],
+        }
+    )
+    run_case.append_webhook_audit_row(row)
+
+
 @app.route("/api/promise-reply", methods=["POST"])
 def api_promise_reply():
     body = request.get_json(silent=True)
@@ -749,6 +822,83 @@ def api_promise_reply():
         return jsonify({"error": "bad_request", "message": "'customer_id' is required and must be non-empty"}), 400
     if not isinstance(message, str) or not message.strip():
         return jsonify({"error": "bad_request", "message": "'message' is required and must be non-empty"}), 400
+
+    # PTP offer-eligibility gate -- only for this case_id's FIRST reply, not
+    # every round of an already-underway clarification loop. Phase 15's
+    # clarification loop deliberately re-asks the SAME case up to
+    # MAX_CLARIFICATION_ROUNDS times, and each round's own prior reply is a
+    # promise_store row still sitting at outcome='pending'/'ambiguous' (i.e.
+    # still "open") -- has_open_promise (inside should_offer_ptp) can't tell
+    # that apart from a genuinely different, unrelated open promise, so
+    # running the gate on round 2/3 would reject a case's own continuing
+    # conversation as "open_promise_exists" against itself. Skipping the
+    # gate once a case's latest promise is STATUS_CLARIFYING is safe because
+    # should_offer_ptp already ran (and passed) on round 1 for this same
+    # case_id -- nothing about the case's eligibility changes mid-loop.
+    prior_promise = promise_store.get_latest_promise_for_case(case_id)
+    is_clarification_continuation = (
+        prior_promise is not None and prior_promise.get("status") == promise_store.STATUS_CLARIFYING
+    )
+
+    if not is_clarification_continuation:
+        # Checked BEFORE promise_store.create_promise() below, for two
+        # reasons: (1) has_open_promise (inside should_offer_ptp) must see
+        # the state as it was BEFORE this reply, not after -- checking after
+        # create_promise would make every reply see its own just-inserted
+        # row and always report "open promise exists"; (2) no point
+        # extracting a date via the LLM for a promise we're going to reject
+        # anyway. Reuses the exact case facts should_offer_ptp saw at
+        # scoring time (see _case_facts_for_ptp_gate) rather than re-deriving
+        # them differently -- only has_open_promise/current_risk_tier are
+        # re-checked live inside should_offer_ptp itself, since those can
+        # genuinely change between scoring time and reply time.
+        original_case_facts = _case_facts_for_ptp_gate(case_id)
+        if original_case_facts is None:
+            # No audit row for this case_id (log reset, or a reply arriving
+            # for a case never run through the scoring pipeline --
+            # deliberately how this repo's own reply-processing test suites
+            # exercise /api/promise-reply in isolation, e.g.
+            # test_promise_clarification.py). should_offer_ptp() has no
+            # decline/retry data to work with here, so its OWN default
+            # (retry_attempt_number absent -> 1) would read as a genuine
+            # first failure and reject with first_failure_awaiting_auto_
+            # retry -- a false rejection manufactured from missing data, not
+            # a real fact about this case. retry_attempt_number=2 sidesteps
+            # that specific default without touching should_offer_ptp()
+            # itself: it does NOT bypass has_open_promise/current_risk_tier
+            # (both still run first, unconditionally, and both are genuinely
+            # known regardless of whether a decline was ever logged for this
+            # case_id) -- it only keeps an unrelated absence of data from
+            # masquerading as "this is definitely a first failure."
+            logger.info(
+                "case_id=%s: no audit row found for PTP gate -- proceeding without decline/retry "
+                "context (open-promise/risk-tier checks still apply)",
+                case_id,
+            )
+            gate_case = {"customer_id": customer_id, "retry_attempt_number": 2}
+        else:
+            gate_case = dict(original_case_facts)
+            gate_case["customer_id"] = customer_id
+
+        eligibility = ptp_trigger.should_offer_ptp(gate_case)
+        if not eligibility["offer_ptp"]:
+            logger.info(
+                "case_id=%s customer_id=%s: PTP reply REJECTED -- trigger_category=%s reason=%s",
+                case_id, customer_id, eligibility["trigger_category"], eligibility["reason"],
+            )
+            _append_ptp_rejection_audit_row(case_id, customer_id, eligibility)
+            return (
+                jsonify(
+                    {
+                        "status": "rejected",
+                        "case_id": case_id,
+                        "ptp_trigger_category": eligibility["trigger_category"],
+                        "ptp_offer_reason": eligibility["reason"],
+                        "message": "This case is not eligible for a promise-to-pay reply right now.",
+                    }
+                ),
+                200,
+            )
 
     # Insert happens before anything else -- the raw reply must be durably
     # saved even if later processing (date extraction) fails on it.
@@ -929,6 +1079,32 @@ def _read_log_tail(path: Path, limit: int, offset: int) -> tuple[list[dict], int
     return _df_records(df), total
 
 
+def _annotate_ptp_status(rows: list[dict]) -> None:
+    """Adds `ptp_status` to each audit-log row in place -- the dashboard's
+    Audit Log table wants, per case, either the customer-committed
+    scheduled date or an explicit "still waiting" marker, without the
+    operator having to open the case-detail modal to find out.
+
+    Reads the case's LATEST promise-to-pay reply only (same "most recent
+    reply wins" convention dashboard/conversations.html's renderCaseCard
+    already uses for its own outcome banner) -- an earlier reply's outcome
+    is superseded once a later one exists. 'Scheduled for: <date>' only
+    when that latest reply actually reached STATUS_SCHEDULED; every other
+    state (no reply yet, still clarifying, fell back, rejected by a
+    guardrail) reads the same to an operator scanning this table -- no
+    customer-confirmed date exists yet -- so they all collapse to
+    'Waiting for user response' rather than a half-dozen granular labels
+    only the case-detail modal needs."""
+    case_ids = [r["case_id"] for r in rows if r.get("case_id")]
+    latest_promises = promise_store.get_latest_promise_status_for_cases(case_ids)
+    for row in rows:
+        promise = latest_promises.get(row.get("case_id"))
+        if promise and promise.get("status") == promise_store.STATUS_SCHEDULED:
+            row["ptp_status"] = f"Scheduled for: {promise.get('extracted_date')}"
+        else:
+            row["ptp_status"] = "Waiting for user response"
+
+
 @app.route("/api/audit-log", methods=["GET"])
 def api_audit_log():
     """Reads logs/webhook_audit_log.csv -- the live pipeline-decision log
@@ -939,6 +1115,7 @@ def api_audit_log():
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     rows, total = _read_log_tail(run_case.WEBHOOK_AUDIT_LOG_PATH, limit, offset)
+    _annotate_ptp_status(rows)
     return jsonify({"rows": rows, "count": len(rows), "total": total})
 
 
@@ -1049,6 +1226,17 @@ def _build_manual_test_case(payload_case: dict) -> dict:
     case = {**DEFAULT_TEST_CASE, **(payload_case or {})}
     case["case_id"] = _force_manual_test_prefix(case.get("case_id"))
     case.setdefault("cumulative_retries_this_txn", case["retry_attempt_number"])
+    # Preset/custom internal-shape triggers bypass map_payload_to_case()
+    # entirely (that's the point -- precise guardrail-rule targeting without
+    # a full Razorpay envelope), so it never got a chance to populate Phase
+    # 18's email<->customer_key directory the way a real webhook or
+    # /api/trigger-webhook-shaped does. Same no-op-if-missing behavior as
+    # that call: DEFAULT_TEST_CASE's email/customer_key are both None, so
+    # this is a no-op for the existing guardrail-targeting presets, and only
+    # takes effect for a preset/custom payload that explicitly sets both.
+    customer_directory.record_customer_contact(
+        case.get("email"), case.get("contact"), case.get("customer_key")
+    )
     return case
 
 
@@ -1100,6 +1288,76 @@ def api_trigger_test_case():
 
 
 # --------------------------------------------------------------------------
+# Phase 21 -- real-Razorpay-shape trigger endpoint. Additive: does NOT modify
+# or replace /api/trigger-test-case above (several dashboard presets depend
+# on that endpoint's internal-case-shape/DEFAULT_TEST_CASE contract for
+# precise guardrail-rule targeting -- this endpoint exercises the OTHER half
+# of the pipeline, the raw-payload mapper, instead).
+#
+# Body: the full Razorpay webhook envelope shape -- {entity, event, payload:
+# {payment: {entity: {...}}, subscription: {...}}, created_at} -- same
+# structure test_webhook_locally.py's SAMPLE_PAYMENT_FAILED uses. Internally
+# calls the exact same map_payload_to_case() + run_case.run_recovery_case()
+# path /webhook/razorpay uses for payment.failed/subscription.pending/
+# subscription.halted (or run_recovered_case() for subscription.charged) --
+# nothing about that mapping is reimplemented or shortcut here.
+#
+# case_id is forced onto the MANUAL_TEST_CASE_ID_PREFIX convention and every
+# row is written with source=SOURCE_MANUAL_TEST, same as
+# /api/trigger-test-case, so these can never be mistaken for a real webhook
+# row in the audit trail. Shares _check_trigger_rate_limit()'s bucket --
+# deliberately not a second independent limiter.
+# --------------------------------------------------------------------------
+@app.route("/api/trigger-webhook-shaped", methods=["POST"])
+def api_trigger_webhook_shaped():
+    if not _check_trigger_rate_limit():
+        return (
+            jsonify(
+                {
+                    "error": "rate_limited",
+                    "message": f"Max {TRIGGER_RATE_LIMIT} trigger requests per {TRIGGER_RATE_WINDOW_SECONDS}s",
+                }
+            ),
+            429,
+        )
+
+    event = request.get_json(silent=True)
+    if not isinstance(event, dict):
+        return jsonify({"error": "bad_request", "message": "expected a JSON object body"}), 400
+
+    event_type = event.get("event") or "payment.failed"
+    logger.info("Dashboard trigger (webhook-shaped): event=%s remote_addr=%s", event_type, request.remote_addr)
+
+    try:
+        if event_type == RECOVERED_EVENT:
+            # Mirrors process_recovered_case's own extraction (same
+            # map_payload_to_case-adjacent field reads: amount/customer_id/
+            # customer_key), just forcing case_id + source=SOURCE_MANUAL_TEST
+            # instead of process_recovered_case's SOURCE_REAL_WEBHOOK.
+            payment_entity, subscription_entity = _extract_entities(event)
+            amount_paise = payment_entity.get("amount") or subscription_entity.get("amount") or 0
+            amount = round(amount_paise / 100.0, 2)
+            customer_id = payment_entity.get("customer_id") or subscription_entity.get("customer_id")
+            customer_key = _customer_key(customer_id, subscription_entity.get("id"))
+            case_id = _force_manual_test_prefix(_extract_case_id(event))
+            row = run_case.run_recovered_case(
+                case_id, amount, customer_key, event_type, source=run_case.SOURCE_MANUAL_TEST
+            )
+        else:
+            case_facts = map_payload_to_case(event)
+            case_facts["case_id"] = _force_manual_test_prefix(case_facts["case_id"])
+            row = run_case.run_recovery_case(case_facts, event_type, source=run_case.SOURCE_MANUAL_TEST)
+
+        _append_webhook_log(event_type, True, row["case_id"], OUTCOME_PROCESSED)
+        return jsonify({"status": "processed", "row": _df_records(pd.DataFrame([row]))[0]}), 200
+
+    except Exception as exc:
+        logger.exception("Dashboard trigger (webhook-shaped) error: event=%s", event_type)
+        _append_webhook_log(event_type, True, None, OUTCOME_ERROR, f"{type(exc).__name__}: {exc}")
+        return jsonify({"status": "error", "message": f"{type(exc).__name__}: {exc}"}), 500
+
+
+# --------------------------------------------------------------------------
 # Task -- per-case detail view: the full flow for ONE case_id in one place --
 # its audit row (SHAP top features, routing_rationale, LLM reasoning_summary,
 # guardrail flags/override, execution result, final_action), its
@@ -1136,12 +1394,207 @@ def api_case_detail(case_id):
         if len(log_lines) > MAX_LOG_LINES_RETURNED:
             log_lines = log_lines[-MAX_LOG_LINES_RETURNED:]
 
-    if audit_row is None and not webhook_log_rows and not log_lines:
+    # Phase 19's promises table is the persisted PTP reply history for this
+    # case (see get_promises_for_case's docstring for why that's `promises`,
+    # not logs/promise_log.csv) -- included here so the case-detail modal's
+    # "Reply as customer" section can show whether/when this case is
+    # actually scheduled, not just the one-off status text from the moment a
+    # reply was last sent (which disappears the instant the modal reopens).
+    # Shaped via _promise_thread_entry (same as /api/customer/<email>/
+    # conversations) so the frontend gets `message`/`scheduled_outcome`
+    # consistently instead of promise_store's raw `raw_customer_reply` column.
+    promises = [_promise_thread_entry(p) for p in promise_store.get_promises_for_case(case_id)]
+
+    if audit_row is None and not webhook_log_rows and not log_lines and not promises:
         return jsonify({"error": "not_found", "message": f"No data found for case_id={case_id!r}"}), 404
 
     return jsonify(
-        {"case_id": case_id, "audit_row": audit_row, "webhook_log_rows": webhook_log_rows, "log_lines": log_lines}
+        {
+            "case_id": case_id,
+            "audit_row": audit_row,
+            "webhook_log_rows": webhook_log_rows,
+            "log_lines": log_lines,
+            "promises": promises,
+        }
     )
+
+
+# --------------------------------------------------------------------------
+# Phase 19 -- conversation-history read API. Read-only: does not modify
+# api_promise_reply or any other existing write path.
+#
+# Joins Phase 18's customer_directory (email <-> customer_key) against
+# logs/webhook_audit_log.csv's own customer_key column -- the only place
+# case_id <-> customer_key is recorded -- to find every case_id a given
+# email has ever had, then reads each case's full reply thread from
+# pipeline/promise_store.py's `promises` table (the source of truth for a
+# promise's lifecycle state; see get_promises_for_case's docstring for why
+# that's `promises`, not logs/promise_log.csv, which lacks guardrail_status/
+# payment_link_id entirely).
+#
+# <path:email> mirrors api_case_detail's <path:case_id> above -- Werkzeug's
+# path converter URL-decodes the segment for us, so an email arriving as
+# `foo%40example.com` or literal `foo@example.com` both resolve correctly.
+# --------------------------------------------------------------------------
+def _load_audit_log_df() -> pd.DataFrame | None:
+    if not run_case.WEBHOOK_AUDIT_LOG_PATH.exists():
+        return None
+    return pd.read_csv(run_case.WEBHOOK_AUDIT_LOG_PATH)
+
+
+def _is_conversation_worthy_case(df: pd.DataFrame, case_id: str) -> bool:
+    """False only for a hard-decline case with no reply history at all --
+    should_offer_ptp's hard_decline verdict means "the payment method
+    itself won't work, so a date commitment is meaningless" (see
+    pipeline/ptp_trigger.py), a PERMANENT fact about the case, not a
+    conditional/temporary one -- unlike open_promise_exists,
+    restricted_tier, or first_failure_awaiting_auto_retry, which can all
+    still have (or later gain) real conversation activity worth showing.
+    Listing a case that can never have a PTP conversation on the Customer
+    Conversations page invites an operator to reply to it, only for
+    api_promise_reply's own should_offer_ptp gate to reject it.
+
+    Looks up the case's FIRST audit row (the original scoring row -- see
+    api_customer_conversations' own case_summary lookup for why not the
+    latest) for ptp_trigger_category. A hard-decline case that DOES already
+    have a promise/reply thread (e.g. from before this gate existed) still
+    shows -- there's real history there worth seeing regardless of what a
+    fresh reply would now be rejected for."""
+    match = df[df["case_id"] == case_id]
+    if match.empty:
+        return True
+    trigger_category = match.iloc[0].get("ptp_trigger_category")
+    if trigger_category != ptp_trigger.CATEGORY_HARD_DECLINE:
+        return True
+    return bool(promise_store.get_promises_for_case(case_id))
+
+
+def _case_ids_and_activity_for_customer_keys(
+    df: pd.DataFrame | None, customer_keys: list[str]
+) -> tuple[list[str], str | None]:
+    """Unique case_ids and the latest timestamp across every
+    webhook_audit_log.csv row whose customer_key is one of customer_keys --
+    excluding hard-decline cases with no reply thread (see
+    _is_conversation_worthy_case). Returns ([], None) if there's no audit
+    log yet or no matching rows -- a known email with no audit-log activity
+    yet degrades to an empty case list, not an error."""
+    if df is None or df.empty or not customer_keys:
+        return [], None
+    match = df[df["customer_key"].isin(customer_keys)]
+    if match.empty:
+        return [], None
+    case_ids = sorted(match["case_id"].dropna().unique().tolist())
+    case_ids = [cid for cid in case_ids if _is_conversation_worthy_case(df, cid)]
+    if not case_ids:
+        return [], None
+    match = match[match["case_id"].isin(case_ids)]
+    last_activity = match["timestamp"].dropna().max() if "timestamp" in match.columns else None
+    return case_ids, (last_activity if pd.notna(last_activity) else None)
+
+
+@app.route("/api/customers", methods=["GET"])
+def api_customers():
+    df = _load_audit_log_df()
+    directory_rows = customer_directory.list_all_customers()
+
+    results = []
+    for row in directory_rows:
+        case_ids, last_activity = _case_ids_and_activity_for_customer_keys(df, row["customer_keys"])
+        # A customer whose only case(s) are hard-decline with no reply
+        # thread (see _is_conversation_worthy_case) has nothing to show on
+        # this page at all -- listing them with "0 cases" is exactly as
+        # misleading as listing the hard-decline case itself would be.
+        if not case_ids:
+            continue
+        results.append(
+            {
+                "email": row["email"],
+                "customer_keys": row["customer_keys"],
+                # Included (not just case_count) so the Customer Conversations
+                # page's search box can match a pasted case_id and find the
+                # owning customer, not just an email substring.
+                "case_ids": case_ids,
+                "case_count": len(case_ids),
+                # Falls back to the directory's own last_seen_at (set on every
+                # webhook, even ones that never reach the audit log e.g. a
+                # signature rejection never happens here since this is post-
+                # verification, but this keeps a freshly-seen customer with
+                # zero audit rows from sorting as if never active).
+                "last_activity": last_activity or row["last_seen_at"],
+            }
+        )
+
+    results.sort(key=lambda r: r["last_activity"] or "", reverse=True)
+    return jsonify({"customers": results, "count": len(results)})
+
+
+def _promise_thread_entry(promise: dict) -> dict:
+    """One promises-table row shaped for the conversations UI -- every field
+    Phase 19's brief asks for, plus a derived `scheduled_outcome` summary so
+    the frontend doesn't need to re-derive STATUS_SCHEDULED/STATUS_FALLBACK
+    branching itself."""
+    status = promise.get("status")
+    outcome = promise.get("outcome")
+    if status == promise_store.STATUS_SCHEDULED:
+        scheduled_outcome = {"kind": "scheduled", "scheduled_for": promise.get("extracted_date")}
+    elif status == promise_store.STATUS_FALLBACK:
+        scheduled_outcome = {"kind": "fallback", "scheduled_for": promise.get("extracted_date")}
+    elif outcome == promise_store.OUTCOME_RESCHEDULE_FAILED:
+        # Guardrail APPROVED this reply (status never left STATUS_PENDING --
+        # only a successful execution moves it to STATUS_SCHEDULED, see
+        # run_case.run_promise_reschedule) but the actual Razorpay API call
+        # to create the payment link failed. That's a materially different
+        # fact from "no reply yet" -- collapsing it into 'awaiting_reply'
+        # would hide a real execution failure behind a generic waiting state.
+        scheduled_outcome = {"kind": "reschedule_failed", "extracted_date": promise.get("extracted_date")}
+    elif status in (promise_store.STATUS_PENDING, promise_store.STATUS_CLARIFYING):
+        scheduled_outcome = {"kind": "awaiting_reply"}
+    elif status == promise_store.STATUS_REQUIRES_HUMAN_REVIEW:
+        scheduled_outcome = {"kind": "requires_human_review"}
+    else:
+        scheduled_outcome = {"kind": status}
+
+    return {
+        "promise_id": promise.get("promise_id"),
+        "message": promise.get("raw_customer_reply"),
+        "created_at": promise.get("created_at"),
+        "extracted_date": promise.get("extracted_date"),
+        "extraction_confidence": promise.get("extraction_confidence"),
+        "guardrail_status": promise.get("guardrail_status"),
+        "clarification_round": promise.get("clarification_round"),
+        "status": status,
+        "outcome": promise.get("outcome"),
+        "payment_link_id": promise.get("payment_link_id"),
+        "scheduled_outcome": scheduled_outcome,
+    }
+
+
+@app.route("/api/customer/<path:email>/conversations", methods=["GET"])
+def api_customer_conversations(email):
+    customer_keys = customer_directory.get_customer_keys_for_email(email)
+    if not customer_keys:
+        return jsonify({"error": "not_found", "message": f"No known customer for email={email!r}"}), 404
+
+    df = _load_audit_log_df()
+    case_ids, _ = _case_ids_and_activity_for_customer_keys(df, customer_keys)
+
+    cases = []
+    for case_id in case_ids:
+        case_summary = None
+        if df is not None:
+            match = df[df["case_id"] == case_id]
+            if not match.empty:
+                # First row = the original payment.failed/subscription.*
+                # audit row (run_promise_reschedule appends later rows under
+                # the SAME case_id for each approved reply -- see that
+                # function's docstring -- so amount/decline_code context
+                # comes from the earliest row, not whichever happens last).
+                case_summary = _df_records(match.iloc[[0]])[0]
+
+        promises = [_promise_thread_entry(p) for p in promise_store.get_promises_for_case(case_id)]
+        cases.append({"case_id": case_id, "case_summary": case_summary, "promises": promises})
+
+    return jsonify({"email": email, "customer_keys": customer_keys, "cases": cases, "case_count": len(cases)})
 
 
 # --------------------------------------------------------------------------
@@ -1202,6 +1655,42 @@ def api_reset_logs():
 
 
 # --------------------------------------------------------------------------
+# Phase 20 follow-up -- "reset" for the Customer Conversations page. Scoped
+# to exactly what that page reads: Phase 18's customer_directory (email <->
+# customer_key) and the promises table (promise-reply thread state).
+# Deliberately does NOT touch customer_history's tenure/ltv/honor-rate
+# scoring table -- same database file, but that's pipeline scoring state,
+# not conversation data -- and does NOT touch webhook_audit_log.csv, since
+# /api/customer/<email>/conversations still needs it to resolve which
+# case_ids a customer has, and the main dashboard's own tables read the same
+# file. (Note: /api/reset-logs's reset_customer_history=true option deletes
+# the whole database file wholesale, which as a side effect also wipes these
+# same two tables -- that's the "bigger, less obviously-reversible" reset;
+# this one is the narrower, page-scoped equivalent.)
+#
+# promise_log.csv is emptied (not deleted), same header-only-rewrite idiom
+# api_reset_logs uses for its CSVs, so /api/promise-reply keeps appending to
+# it immediately afterward without a "file missing" edge case.
+# --------------------------------------------------------------------------
+@app.route("/api/reset-conversations", methods=["POST"])
+def api_reset_conversations():
+    cleared = []
+
+    customer_directory.reset_all()
+    cleared.append("customer_directory")
+
+    promise_store.reset_all_promises()
+    cleared.append("promises")
+
+    PROMISE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(columns=PROMISE_LOG_COLUMNS).to_csv(PROMISE_LOG_PATH, index=False)
+    cleared.append(PROMISE_LOG_PATH.name)
+
+    logger.warning("Customer Conversations reset triggered: cleared %s remote_addr=%s", cleared, request.remote_addr)
+    return jsonify({"status": "reset", "cleared": cleared})
+
+
+# --------------------------------------------------------------------------
 # Task 5 -- dashboard page. No authentication (removed at user's request --
 # this endpoint, the /api/* endpoints, and the audit/webhook logs are all
 # publicly readable/triggerable at https://razor-recover.heracle.fit).
@@ -1212,6 +1701,19 @@ DASHBOARD_HTML_PATH = BASE_DIR / "dashboard" / "index.html"
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     return Response(DASHBOARD_HTML_PATH.read_text(encoding="utf-8"), mimetype="text/html")
+
+
+# --------------------------------------------------------------------------
+# Phase 20 -- separate Customer Conversations page (dashboard/index.html is
+# already dense; this is a distinct view, its own file, same no-auth posture
+# as /dashboard above).
+# --------------------------------------------------------------------------
+CONVERSATIONS_HTML_PATH = BASE_DIR / "dashboard" / "conversations.html"
+
+
+@app.route("/conversations", methods=["GET"])
+def conversations_page():
+    return Response(CONVERSATIONS_HTML_PATH.read_text(encoding="utf-8"), mimetype="text/html")
 
 
 def _startup_checks() -> None:
