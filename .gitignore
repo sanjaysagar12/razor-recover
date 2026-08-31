@@ -9,6 +9,7 @@ logs/*.log
 logs/webhook_audit_log.csv
 logs/pending_retries.csv
 logs/webhook_log.csv
+logs/promise_log.csv
 
 # Live webhook state (not synthetic training data)
 data/customer_history.db

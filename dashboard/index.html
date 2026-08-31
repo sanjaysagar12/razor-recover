@@ -58,6 +58,10 @@
     border: 1px solid var(--border); border-radius: 8px; padding: 10px; font: 12px/1.4 monospace; resize: vertical;
   }
   .row { display: flex; gap: 10px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+  .chat-input {
+    flex: 1; min-width: 220px; background: #0b0f19; color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit;
+  }
   button.primary {
     background: var(--accent); border: none; color: #fff; border-radius: 8px;
     padding: 8px 16px; cursor: pointer; font-weight: 600;
@@ -542,6 +546,13 @@ function renderCaseDetail(data) {
     ? (row.llm_reasoning_summary || '(LLM routed but no reasoning_summary captured -- likely a schema-validation fallback; check llm_schema_valid below)')
     : '(Not routed to the LLM -- this case was resolved by the tree-model template action, no AI reasoning involved.)';
 
+  // customer_key is the only customer identifier a case carries (see
+  // pipeline/customer_history.py); manual-test/preset-triggered cases often
+  // have none, so fall back to a case-scoped synthetic id, mirroring the
+  // "sub:<subscription_id>" fallback webhook_receiver._customer_key already
+  // uses when a real customer_id is missing.
+  const promiseCustomerId = row.customer_key || ('case:' + row.case_id);
+
   return `
     <div class="dhead">
       <div>
@@ -592,6 +603,18 @@ function renderCaseDetail(data) {
     </div>
 
     <div class="dsection">
+      <h4>Reply as customer (promise-to-pay)</h4>
+      <div class="sub">Sends a raw reply for this case -- stored as-is, not yet parsed into a date or actioned (that's a later phase).</div>
+      <div class="row">
+        <input type="text" class="chat-input" id="promiseInput" placeholder="e.g. I'll pay on the 5th"
+          onkeydown="if(event.key==='Enter'){document.getElementById('promiseSendBtn').click();}">
+        <button class="primary" id="promiseSendBtn" data-case-id="${escapeHtml(row.case_id)}"
+          data-customer-id="${escapeHtml(promiseCustomerId)}" onclick="sendPromiseReply(this)">Send</button>
+      </div>
+      <div class="sub" id="promiseStatus" style="margin-top:8px"></div>
+    </div>
+
+    <div class="dsection">
       <h4>Log trace (logs/webhook_receiver.log, step-by-step)</h4>
       <pre class="detail-log">${data.log_lines.length ? escapeHtml(data.log_lines.join('\n')) : '(no matching log lines -- may have been cleared by a reset)'}</pre>
     </div>
@@ -617,6 +640,47 @@ async function showCaseDetail(caseId) {
 
 function closeCaseDetail() {
   document.getElementById('detailOverlay').classList.remove('open');
+}
+
+// -- Promise-to-pay reply (Phase 11 -- receive/store only, no parsing yet) --
+async function sendPromiseReply(btn) {
+  const caseId = btn.dataset.caseId;
+  const customerId = btn.dataset.customerId;
+  const input = document.getElementById('promiseInput');
+  const statusEl = document.getElementById('promiseStatus');
+  const message = input.value;
+
+  if (!message.trim()) {
+    statusEl.textContent = 'Type a message first.';
+    statusEl.style.color = 'var(--amber)';
+    return;
+  }
+
+  btn.disabled = true;
+  input.disabled = true;
+  statusEl.textContent = 'Sending...';
+  statusEl.style.color = 'var(--text-dim)';
+  try {
+    const resp = await apiFetch('/api/promise-reply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ case_id: caseId, customer_id: customerId, message }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      statusEl.textContent = 'Failed: ' + (data.message || resp.statusText);
+      statusEl.style.color = 'var(--red)';
+    } else {
+      statusEl.textContent = `Message received (promise_id=${data.promise_id})`;
+      statusEl.style.color = 'var(--green)';
+      input.value = '';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + String(e);
+    statusEl.style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false;
+    input.disabled = false;
+  }
 }
 
 document.addEventListener('keydown', (e) => {

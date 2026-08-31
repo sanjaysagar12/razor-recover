@@ -45,6 +45,7 @@ import confidence_gate  # noqa: E402
 import customer_history  # noqa: E402
 import decline_code_mapper  # noqa: E402
 import execute_action  # noqa: E402
+import promise_store  # noqa: E402
 import run_case  # noqa: E402
 
 load_dotenv()
@@ -498,6 +499,61 @@ def razorpay_webhook():
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"}), 200
+
+
+# --------------------------------------------------------------------------
+# Task -- Phase 11 promise-to-pay reply intake. RECEIVES AND STORES the
+# customer's raw reply only -- no date parsing, no guardrails, no payment
+# link creation (later phases). promise_store.create_promise is called
+# before any other processing so the raw message is durably saved even if
+# a later phase's processing fails on it.
+# --------------------------------------------------------------------------
+PROMISE_LOG_PATH = LOGS_DIR / "promise_log.csv"
+PROMISE_LOG_COLUMNS = ["timestamp", "case_id", "customer_id", "promise_id", "message", "outcome"]
+
+
+def _append_promise_log(case_id: str, customer_id: str, promise_id: str, message: str, outcome: str) -> None:
+    PROMISE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "case_id": case_id,
+        "customer_id": customer_id,
+        "promise_id": promise_id,
+        "message": message,
+        "outcome": outcome,
+    }
+    df = pd.DataFrame([row], columns=PROMISE_LOG_COLUMNS)
+    write_header = not PROMISE_LOG_PATH.exists()
+    df.to_csv(PROMISE_LOG_PATH, mode="a", header=write_header, index=False)
+
+
+@app.route("/api/promise-reply", methods=["POST"])
+def api_promise_reply():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "bad_request", "message": "expected a JSON object body"}), 400
+
+    case_id = body.get("case_id")
+    customer_id = body.get("customer_id")
+    message = body.get("message")
+
+    if not isinstance(case_id, str) or not case_id.strip():
+        return jsonify({"error": "bad_request", "message": "'case_id' is required and must be non-empty"}), 400
+    if not isinstance(customer_id, str) or not customer_id.strip():
+        return jsonify({"error": "bad_request", "message": "'customer_id' is required and must be non-empty"}), 400
+    if not isinstance(message, str) or not message.strip():
+        return jsonify({"error": "bad_request", "message": "'message' is required and must be non-empty"}), 400
+
+    # Insert happens before anything else -- the raw reply must be durably
+    # saved even if later processing (not implemented yet) fails on it.
+    promise_id = promise_store.create_promise(case_id, customer_id, message)
+    logger.info(
+        "Promise reply received: promise_id=%s case_id=%s customer_id=%s remote_addr=%s",
+        promise_id, case_id, customer_id, request.remote_addr,
+    )
+    _append_promise_log(case_id, customer_id, promise_id, message, promise_store.OUTCOME_PENDING)
+
+    return jsonify({"promise_id": promise_id, "status": "received"}), 200
 
 
 # --------------------------------------------------------------------------
