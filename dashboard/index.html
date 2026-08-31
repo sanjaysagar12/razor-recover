@@ -642,7 +642,7 @@ function closeCaseDetail() {
   document.getElementById('detailOverlay').classList.remove('open');
 }
 
-// -- Promise-to-pay reply (Phase 11 -- receive/store only, no parsing yet) --
+// -- Promise-to-pay reply (store raw reply, then extract a commitment date) --
 async function sendPromiseReply(btn) {
   const caseId = btn.dataset.caseId;
   const customerId = btn.dataset.customerId;
@@ -669,8 +669,12 @@ async function sendPromiseReply(btn) {
     if (!resp.ok) {
       statusEl.textContent = 'Failed: ' + (data.message || resp.statusText);
       statusEl.style.color = 'var(--red)';
+    } else if (data.ambiguous) {
+      statusEl.textContent = `Received -- no clear date (${data.clarification_needed || 'clarification needed'})`;
+      statusEl.style.color = 'var(--amber)';
+      input.value = '';
     } else {
-      statusEl.textContent = `Message received (promise_id=${data.promise_id})`;
+      statusEl.textContent = `Received -- extracted date ${data.extracted_date} (confidence ${data.extraction_confidence})`;
       statusEl.style.color = 'var(--green)';
       input.value = '';
     }

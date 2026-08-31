@@ -89,6 +89,45 @@ def _format_few_shot() -> str:
     return "\n\n".join(blocks)
 
 
+# --------------------------------------------------------------------------
+# Promise-to-pay date extraction -- parses a customer's free-text reply
+# (collected via /api/promise-reply) into a structured commitment date.
+# Separate system prompt from SYSTEM_PROMPT above: different task (NL date
+# extraction, not a SHAP-grounded recovery-action recommendation), same
+# adapters/client/validation machinery in pipeline/llm_layer.py.
+# --------------------------------------------------------------------------
+PROMISE_DATE_SYSTEM_PROMPT = """You extract a promise-to-pay date from a customer's free-text reply in a payment-recovery chat. You are given the actual current date explicitly -- never infer or assume "today" on your own, and resolve every relative expression ("next Friday", "in 3 days", "end of the month", "give me a week") against that given date, not any other date.
+
+Rules:
+1. The current date is always given to you in the prompt as "today's date". Treat it as ground truth. Resolve all relative date expressions against it.
+2. If the reply contains an extractable commitment -- a specific date, or a relative expression precise enough to resolve to one exact date -- set extracted_date to that date in YYYY-MM-DD format.
+3. If the reply does NOT contain an extractable commitment (no date mentioned, or a vague expression with no further specificity such as "soon", "later", "this month", "maybe next month"), set extracted_date to null and ambiguous to true. Do not guess a date to fill the field.
+4. Never invent a date that is not implied by the text. A vague-but-present time reference ("sometime next week") is ambiguous unless it resolves to one exact day -- when it does not resolve to a single day, extracted_date must be null. "End of the month" / "end of this month" is an exception worth naming explicitly: it DOES resolve to one exact day -- the last calendar day of the month containing today's date -- so treat it as extractable, not vague, and compute that day from today's date. Contrast this with "this month" or "sometime this month" alone (no "end of"), which name a whole month with no single day implied and stay ambiguous.
+5. A reply with no commitment at all (e.g. "I'm broke right now", "can't afford it", refusal, or an unrelated/hostile message) is also ambiguous=true, extracted_date=null.
+6. Whenever ambiguous is true, populate clarification_needed with a short, ready-to-send, customer-facing follow-up question (e.g. "Could you give me a specific date you'd like to pay by?"). It will be sent to the customer as-is, so phrase it as a direct, polite question -- not an internal note. When ambiguous is false, clarification_needed must be null.
+7. Set confidence to reflect your certainty in the EXTRACTION, not the customer's tone or sentiment. A clearly stated date is high confidence (>=0.85) even if the customer sounds annoyed or frustrated. A vague-but-present relative date that still resolves to one exact day (e.g. "give me a week") is medium-high confidence (roughly 0.55-0.8). No extractable date at all is confidence near 0 (<=0.15), together with ambiguous=true.
+8. Submit your result using the structured output format -- do not respond with free text."""
+
+
+def build_promise_date_user_prompt(message: str, case_context: dict) -> str:
+    """case_context must include "today" (ISO date, explicit -- see
+    PROMISE_DATE_SYSTEM_PROMPT rule 1). case_id/amount/decline_code are
+    included when present for grounding context only -- optional, never
+    required for extraction itself."""
+    facts = [f'today\'s date: {case_context["today"]}']
+    if case_context.get("case_id"):
+        facts.append(f"case_id: {case_context['case_id']}")
+    if case_context.get("amount") is not None:
+        facts.append(f"original amount due: {case_context['amount']}")
+    if case_context.get("decline_code"):
+        facts.append(f"decline_code: {case_context['decline_code']}")
+    return (
+        f"{chr(10).join(facts)}\n\n"
+        f'Customer\'s reply:\n"""\n{message}\n"""\n\n'
+        "Extract the promise-to-pay date from this reply."
+    )
+
+
 def build_user_prompt(case: dict) -> str:
     """case: {case_id, tree_model_score, shap_top_features, case_facts} --
     see pipeline/run_phase5.py for how this is assembled from the Phase 4

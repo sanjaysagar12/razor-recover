@@ -114,3 +114,76 @@ GEMINI_RESPONSE_SCHEMA: dict = {
     },
     "required": _PROPOSED_REQUIRED,
 }
+
+
+# --------------------------------------------------------------------------
+# Promise-to-pay date extraction -- structured output shape for
+# llm_layer.extract_promise_date. Same three-forms pattern as LLMDecision
+# above: a Pydantic model for validating the assembled result, plus a
+# Claude tool schema and a Gemini response schema for the two providers'
+# structured-output APIs. model_version/timestamp are echoed in host-side
+# (see llm_layer._echoed_date_fields), same as case_id/tree_model_score are
+# for LLMDecision -- the LLM only ever produces the four fields below.
+# --------------------------------------------------------------------------
+class PromiseDateExtraction(BaseModel):
+    """Validated shape of a promise-date extraction result."""
+
+    extracted_date: Optional[str] = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    ambiguous: bool = False
+    clarification_needed: Optional[str] = None
+
+
+_PROMISE_DATE_PROPERTIES_BASE = {
+    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "ambiguous": {"type": "boolean"},
+}
+
+_PROMISE_DATE_REQUIRED = ["extracted_date", "confidence", "ambiguous", "clarification_needed"]
+
+CLAUDE_PROMISE_DATE_TOOL_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        **_PROMISE_DATE_PROPERTIES_BASE,
+        "extracted_date": {
+            "type": ["string", "null"],
+            "description": (
+                "The customer's committed payment date as YYYY-MM-DD, resolved against the "
+                "explicit today's-date given in the prompt. Null if no specific date is extractable."
+            ),
+        },
+        "clarification_needed": {
+            "type": ["string", "null"],
+            "description": (
+                "A short, ready-to-send, customer-facing follow-up question -- populated whenever "
+                "ambiguous is true, else null."
+            ),
+        },
+    },
+    "required": _PROMISE_DATE_REQUIRED,
+    "additionalProperties": False,
+}
+
+GEMINI_PROMISE_DATE_RESPONSE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        **_PROMISE_DATE_PROPERTIES_BASE,
+        "extracted_date": {
+            "type": "string",
+            "nullable": True,
+            "description": (
+                "The customer's committed payment date as YYYY-MM-DD, resolved against the "
+                "explicit today's-date given in the prompt. Null if no specific date is extractable."
+            ),
+        },
+        "clarification_needed": {
+            "type": "string",
+            "nullable": True,
+            "description": (
+                "A short, ready-to-send, customer-facing follow-up question -- populated whenever "
+                "ambiguous is true, else null."
+            ),
+        },
+    },
+    "required": _PROMISE_DATE_REQUIRED,
+}

@@ -26,6 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "data" / "customer_history.db"
 
 OUTCOME_PENDING = "pending"
+OUTCOME_AMBIGUOUS = "ambiguous"
 
 
 @contextmanager
@@ -75,3 +76,30 @@ def create_promise(case_id: str, customer_id: str | None, raw_customer_reply: st
             (promise_id, case_id, customer_id, raw_customer_reply, OUTCOME_PENDING, now_iso),
         )
     return promise_id
+
+
+def update_promise_extraction(
+    promise_id: str, extracted_date: str | None, extraction_confidence: float | None, ambiguous: bool
+) -> None:
+    """Writes a date-extraction result back onto the row create_promise
+    already inserted -- update in place, never a new row/table.
+    guardrail_status and payment_link_id are untouched here (still NULL,
+    same as create_promise left them -- guardrail validation and payment-
+    link creation are later phases).
+
+    outcome moves from 'pending' to 'ambiguous' when the extraction could
+    not pull a specific date, so a later phase can find "replies awaiting a
+    clarification question" without re-deriving that from extracted_date
+    being NULL. A successful extraction leaves outcome at 'pending' --
+    it still awaits guardrail validation before anything is actioned.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE promises SET extracted_date = ?, extraction_confidence = ?, outcome = ? WHERE promise_id = ?",
+            (
+                extracted_date,
+                extraction_confidence,
+                OUTCOME_AMBIGUOUS if ambiguous else OUTCOME_PENDING,
+                promise_id,
+            ),
+        )
