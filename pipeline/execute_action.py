@@ -240,6 +240,13 @@ def execute_promise_reschedule(case: dict, promise: dict, guardrail_result: dict
             # already globally unique on its own (see promise_store.create_promise).
             "reference_id": promise["promise_id"],
             "expire_by": _date_to_ist_eod_epoch(extracted_date),
+            # Phase 16 -- Razorpay echoes `notes` back on every webhook event for
+            # this link (and on the payment it produces), so this is the most
+            # robust way for pipeline/ptp_outcomes.find_open_promise to match an
+            # incoming payment.captured/payment_link.paid event back to this exact
+            # promise -- more reliable than parsing payment_link_id out of a
+            # webhook payload shape that varies by event type.
+            "notes": {"promise_id": promise["promise_id"]},
         }
         link = client.payment_link.create(payload)
         link_id = link.get("id")

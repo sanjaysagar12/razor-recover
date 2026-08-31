@@ -33,6 +33,12 @@ OUTCOME_RESCHEDULE_FAILED = "reschedule_failed"
 # confirmed date. Distinct from OUTCOME_AMBIGUOUS, which just means "awaiting
 # a clarification question" -- OUTCOME_NO_REPLY means the loop is over.
 OUTCOME_NO_REPLY = "no_reply"
+# Phase 16 -- terminal honor/break states for a promise that WAS scheduled
+# (has a payment_link_id, outcome was 'pending'). Set by pipeline/
+# ptp_outcomes.py, never directly by the reply-intake or reschedule-execution
+# flows above.
+OUTCOME_HONORED = "honored"
+OUTCOME_BROKEN = "broken"
 
 # Phase 15 -- clarification-loop lifecycle. Every promise row's `status`
 # holds one of these, independent of `outcome` above (outcome is Phase 9-14's
@@ -70,11 +76,13 @@ def _connect():
                 created_at TEXT NOT NULL,
                 resolved_at TEXT,
                 clarification_round INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'pending'
+                status TEXT NOT NULL DEFAULT 'pending',
+                late_recovery_at TEXT
             )
             """
         )
         _migrate_clarification_columns(conn)
+        _migrate_honor_tracking_columns(conn)
         yield conn
         conn.commit()
     finally:
@@ -102,6 +110,17 @@ def _migrate_clarification_columns(conn: sqlite3.Connection) -> None:
             "UPDATE promises SET status = CASE WHEN payment_link_id IS NOT NULL THEN ? ELSE ? END",
             (STATUS_SCHEDULED, STATUS_PENDING),
         )
+
+
+def _migrate_honor_tracking_columns(conn: sqlite3.Connection) -> None:
+    """Phase 16 -- adds late_recovery_at to a promises table that may already
+    exist from Phase 9-15 (a table just created fresh by CREATE TABLE IF NOT
+    EXISTS above already has it and this is a no-op). No backfill needed --
+    a late recovery can only be observed going forward, from a webhook event
+    that arrives after this phase is deployed."""
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(promises)").fetchall()}
+    if "late_recovery_at" not in existing_columns:
+        conn.execute("ALTER TABLE promises ADD COLUMN late_recovery_at TEXT")
 
 
 def create_promise(case_id: str, customer_id: str | None, raw_customer_reply: str) -> str:
@@ -259,4 +278,90 @@ def mark_promise_no_reply(promise_id: str) -> None:
         conn.execute(
             "UPDATE promises SET outcome = ? WHERE promise_id = ?",
             (OUTCOME_NO_REPLY, promise_id),
+        )
+
+
+# --------------------------------------------------------------------------
+# Phase 16 -- honor/break tracking. Query and terminal-state helpers used by
+# pipeline/ptp_outcomes.py; this module stays pure DB access (no webhook
+# payload parsing, no CSV logging, no stats -- see that module's docstring
+# for why it lives separately).
+# --------------------------------------------------------------------------
+def get_promise_by_payment_link_id(payment_link_id: str) -> dict | None:
+    """Fallback match for find_open_promise/find_any_promise when a webhook
+    payload's notes are missing or don't carry promise_id -- looks up by the
+    payment_link_id stored on the row by update_promise_payment_link. Returns
+    the most recently created match if (improbably) more than one promise
+    row ever shares a payment_link_id; in practice each Phase 14 reschedule
+    creates a fresh Razorpay payment link, so this is one-to-one."""
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM promises WHERE payment_link_id = ? ORDER BY created_at DESC LIMIT 1",
+            (payment_link_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_expired_pending_promises(today_iso: str) -> list[dict]:
+    """Rows eligible for check_expired_promises() to mark 'broken':
+    outcome='pending' (never yet resolved to honored/broken), extracted_date
+    in the past relative to today_iso (YYYY-MM-DD, string comparison is
+    valid since extracted_date is always YYYY-MM-DD -- see llm_layer's
+    _ISO_DATE_RE validation), AND payment_link_id IS NOT NULL.
+
+    That last condition isn't in the plan doc's literal SQL sketch, but is
+    required for correctness: outcome stays 'pending' not just for scheduled
+    promises awaiting resolution, but also for ones a PTP guardrail rejected
+    (rejected_window_cap/rejected_past_date) or that are still mid
+    clarification -- those never got a payment link and must never be
+    reported as a 'broken' promise-to-pay, since no payment was ever
+    scheduled for them to break."""
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM promises WHERE outcome = ? AND payment_link_id IS NOT NULL "
+            "AND extracted_date IS NOT NULL AND extracted_date < ?",
+            (OUTCOME_PENDING, today_iso),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def mark_promise_honored(promise_id: str) -> None:
+    """outcome 'pending' -> 'honored', resolved_at = now(). Called when a
+    payment.captured/payment_link.paid webhook matches a still-open
+    promise."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE promises SET outcome = ?, resolved_at = ? WHERE promise_id = ?",
+            (OUTCOME_HONORED, now_iso, promise_id),
+        )
+
+
+def mark_promise_broken(promise_id: str) -> None:
+    """outcome 'pending' -> 'broken', resolved_at = now(). Called only by
+    check_expired_promises() -- never directly from a payment.failed webhook
+    (see that handler's docstring: a customer may still pay before the
+    deadline)."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE promises SET outcome = ?, resolved_at = ? WHERE promise_id = ?",
+            (OUTCOME_BROKEN, now_iso, promise_id),
+        )
+
+
+def mark_promise_late_recovery(promise_id: str) -> None:
+    """Records that money eventually arrived for a promise the deadline
+    check already marked 'broken' -- late_recovery_at is set, but outcome
+    deliberately stays 'broken' (the promise itself was broken; the debt
+    being recovered late is a separate fact, tracked here so it isn't lost,
+    not a reason to rewrite history). See pipeline/ptp_outcomes.py's
+    handle_payment_captured for the routing decision."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE promises SET late_recovery_at = ? WHERE promise_id = ?",
+            (now_iso, promise_id),
         )

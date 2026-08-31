@@ -48,6 +48,7 @@ import execute_action  # noqa: E402
 import guardrails  # noqa: E402
 import llm_layer  # noqa: E402
 import promise_store  # noqa: E402
+import ptp_outcomes  # noqa: E402
 import run_case  # noqa: E402
 
 load_dotenv()
@@ -114,6 +115,16 @@ def _append_webhook_log(
 # --------------------------------------------------------------------------
 RECOVERY_EVENTS = {"payment.failed", "subscription.pending", "subscription.halted"}
 RECOVERED_EVENT = "subscription.charged"
+
+# Phase 16 -- PTP honor/break tracking. Independent of RECOVERY_EVENTS/
+# RECOVERED_EVENT above: a payment.captured/payment_link.paid event for a
+# Phase 14 promise-to-pay link has nothing to do with the decline-recovery
+# pipeline (no decline code, no subscription retry), so it's routed
+# separately rather than through process_recovery_case/process_recovered_case.
+# payment.failed is already in RECOVERY_EVENTS and keeps going through the
+# full pipeline unchanged below -- ptp_outcomes.handle_payment_failed is
+# called alongside that, purely for its own (non-mutating) logging.
+PTP_HONOR_EVENTS = {"payment.captured", "payment_link.paid"}
 
 # --------------------------------------------------------------------------
 # Decline-code / payment-rail mapping
@@ -450,6 +461,14 @@ def razorpay_webhook():
 
     if event_type in RECOVERY_EVENTS:
         case_id = _extract_case_id(event)
+        if event_type == "payment.failed":
+            # Phase 16 -- observational only, never blocks or alters the
+            # decline-recovery pipeline below. Wrapped defensively so a bug
+            # here can never turn a normal payment.failed webhook into a 500.
+            try:
+                ptp_outcomes.handle_payment_failed(event, event_type)
+            except Exception:  # noqa: BLE001
+                logger.exception("case_id=%s: ptp_outcomes.handle_payment_failed raised", case_id)
         try:
             audit_row = process_recovery_case(event, event_type)
             _append_webhook_log(event_type, True, audit_row["case_id"], OUTCOME_PROCESSED)
@@ -491,6 +510,30 @@ def razorpay_webhook():
         row = process_recovered_case(event, event_type)
         _append_webhook_log(event_type, True, row["case_id"], OUTCOME_PROCESSED)
         return jsonify({"status": "recovered", "case_id": row["case_id"], "event": event_type, "amount": row["amount"]}), 200
+
+    elif event_type in PTP_HONOR_EVENTS:
+        try:
+            result = ptp_outcomes.handle_payment_captured(event, event_type)
+        except Exception as exc:
+            logger.exception("PTP honor-tracking error processing event=%s", event_type)
+            _append_webhook_log(event_type, True, None, OUTCOME_ERROR, f"{type(exc).__name__}: {exc}")
+            return jsonify({"status": "error", "event": event_type, "message": "ptp_outcomes error"}), 200
+
+        outcome = OUTCOME_PROCESSED if result["matched"] else OUTCOME_IGNORED
+        _append_webhook_log(event_type, True, result.get("case_id"), outcome)
+        return (
+            jsonify(
+                {
+                    "status": "processed" if result["matched"] else "ignored",
+                    "event": event_type,
+                    "matched_promise": result["matched"],
+                    "promise_id": result.get("promise_id"),
+                    "case_id": result.get("case_id"),
+                    "transition": result.get("transition"),
+                }
+            ),
+            200,
+        )
 
     else:
         logger.info("Event=%s -- no handler, acking as ignored", event_type)
@@ -1092,6 +1135,18 @@ def api_case_detail(case_id):
 
 
 # --------------------------------------------------------------------------
+# Phase 16 -- manual/cron trigger for the deadline sweep, alongside the
+# background thread started in _startup_checks(). Lets an operator (or an
+# external cron, or a demo) force the check_expired_promises() pass on
+# demand instead of waiting for the next timer tick.
+# --------------------------------------------------------------------------
+@app.route("/api/ptp/check-expired", methods=["POST"])
+def api_ptp_check_expired():
+    results = ptp_outcomes.check_expired_promises()
+    return jsonify({"status": "ok", "broken_count": len(results), "broken": results})
+
+
+# --------------------------------------------------------------------------
 # Dashboard "reset" -- clears the demo/log state back to empty so a session
 # of preset-clicking and custom triggers doesn't linger into the next demo.
 # Empties (not deletes) the three CSV logs by rewriting them header-only, so
@@ -1157,6 +1212,8 @@ def _startup_checks() -> None:
     band_low, band_high = run_case.get_probability_band()
     logger.info("Confidence-gate probability band fit: low=%.4f high=%.4f", band_low, band_high)
     logger.info("Pipeline warm-up complete.")
+
+    ptp_outcomes.start_background_expiry_checker()
 
 
 if __name__ == "__main__":
