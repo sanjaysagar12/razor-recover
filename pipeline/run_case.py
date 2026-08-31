@@ -185,6 +185,7 @@ def run_recovery_case(case_facts: dict, event_type: str, source: str = SOURCE_RE
     record = confidence_gate.route_case(
         case_id, tree_model_score, case_facts["decline_code"], band_low, band_high,
         is_ambiguous=case_facts.get("decline_code_is_ambiguous"),
+        risk_tier=case_facts.get("current_risk_tier"),
     )
     logger.info(
         "case_id=%s: routed -- routed_to_llm=%s routing_trigger=%s template_action=%s",

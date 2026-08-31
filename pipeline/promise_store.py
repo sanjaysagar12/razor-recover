@@ -303,6 +303,33 @@ def get_promise_by_payment_link_id(payment_link_id: str) -> dict | None:
         return dict(row) if row else None
 
 
+def get_recent_resolved_outcomes(customer_id: str | None, limit: int = 2) -> list[str]:
+    """Most-recent-first outcomes ('honored'/'broken') for customer_id's last
+    `limit` RESOLVED promises (ordered by resolved_at DESC) -- Phase 17 uses
+    this to detect two CONSECUTIVE broken promises for the watch->restricted
+    risk-tier transition, as distinct from customer_ptp_stats' aggregate
+    historical_ptp_honor_rate (which can't tell "broken, then broken" apart
+    from "broken, then honored, then broken").
+
+    late_recovery_at is irrelevant here: a promise that recovered late is
+    still outcome='broken' (see mark_promise_late_recovery's docstring --
+    outcome deliberately never flips back), so it correctly still counts as
+    a broken outcome for this consecutive check.
+
+    Returns [] for customer_id=None (nothing to key the query on) or a
+    customer with no resolved promises yet.
+    """
+    if not customer_id:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT outcome FROM promises WHERE customer_id = ? AND outcome IN (?, ?) "
+            "ORDER BY resolved_at DESC LIMIT ?",
+            (customer_id, OUTCOME_HONORED, OUTCOME_BROKEN, limit),
+        ).fetchall()
+        return [row[0] for row in rows]
+
+
 def get_expired_pending_promises(today_iso: str) -> list[dict]:
     """Rows eligible for check_expired_promises() to mark 'broken':
     outcome='pending' (never yet resolved to honored/broken), extracted_date

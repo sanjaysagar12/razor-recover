@@ -105,6 +105,10 @@ def _scheduled_hour_ist(action_scheduled_for: Optional[str]) -> Optional[int]:
 # --------------------------------------------------------------------------
 
 
+def _cond_customer_risk_restricted(case: dict, proposed: dict) -> bool:
+    return case.get("current_risk_tier") == "restricted"
+
+
 def _cond_hard_decline(case: dict, proposed: dict) -> bool:
     return case.get("decline_code") in HARD_DECLINE_CODES
 
@@ -138,9 +142,30 @@ def _override_escalate_review(case: dict, proposed: dict) -> dict:
     return {"requires_human_review": True}
 
 
+def _override_force_escalate_human(case: dict, proposed: dict) -> dict:
+    # Reuses the existing "escalate_human" RECOMMENDED_ACTIONS value rather
+    # than inventing a new final_action -- a guardrail-forced human-review
+    # routing is a recommended_action override, same pattern as
+    # _override_force_no_retry above, not a new action type.
+    return {"final_action": "escalate_human", "requires_human_review": True}
+
+
 # Ordered rule set -- order determines which rule's override "wins" on
 # final_action when several fire on the same case (see apply_guardrails).
+#
+# Phase 17 -- customer_risk_restricted is listed FIRST, ahead of even
+# hard_decline_excluded: a restricted-tier customer must never be offered
+# the self-service PTP chat/reschedule flow regardless of what else is true
+# about the case, so its override always wins final_action if it fires.
+# hard_decline_excluded (and every other rule) still runs and still records
+# itself in guardrail_flags when it also fires on the same case -- only the
+# WINNING final_action changes, per apply_guardrails' "every rule always
+# evaluated" contract -- so the audit trail keeps both facts (e.g. a
+# restricted customer's stolen-card case shows both "customer_risk_restricted"
+# and "hard_decline_excluded" in guardrail_flags, with final_action forced to
+# escalate_human instead of hard_decline_excluded's own no_retry_prompt_update).
 GUARDRAIL_RULES: list[GuardrailRule] = [
+    ("customer_risk_restricted", _cond_customer_risk_restricted, _override_force_escalate_human),
     ("hard_decline_excluded", _cond_hard_decline, _override_force_no_retry),
     ("npci_retry_cap_reached", _cond_npci_retry_cap_reached, _override_force_no_retry),
     ("npci_peak_window", _cond_npci_peak_window, _override_force_no_retry),

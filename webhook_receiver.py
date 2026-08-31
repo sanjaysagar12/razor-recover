@@ -43,6 +43,7 @@ sys.path.insert(0, str(PIPELINE_DIR))
 
 import confidence_gate  # noqa: E402
 import customer_history  # noqa: E402
+import customer_ptp_stats  # noqa: E402
 import decline_code_mapper  # noqa: E402
 import execute_action  # noqa: E402
 import guardrails  # noqa: E402
@@ -324,6 +325,13 @@ def map_payload_to_case(event: dict) -> dict:
     customer_key = _customer_key(customer_id, subscription_entity.get("id"))
     customer_fields, is_first_seen = customer_history.get_or_create_customer(customer_key)
     customer_history_source = "first_seen_defaults" if is_first_seen else "existing_history"
+    # Phase 17 -- customer_ptp_stats is keyed by the raw customer_id (the PTP
+    # reply-intake identity, not customer_history's customer_key
+    # fallback-to-subscription scheme -- see customer_ptp_stats.py's module
+    # docstring), so this is looked up separately from customer_fields above.
+    # customer_id=None (no Razorpay customer_id on this payload) correctly
+    # falls back to "normal" via get_risk_tier's own None-handling.
+    current_risk_tier = customer_ptp_stats.get_risk_tier(customer_id)
     if is_first_seen:
         logger.info(
             "case_id=%s: first-seen customer_key=%r -- created new customer_history record with neutral "
@@ -350,6 +358,7 @@ def map_payload_to_case(event: dict) -> dict:
         "customer_id": customer_id,
         "customer_key": customer_key,
         "customer_history_source": customer_history_source,
+        "current_risk_tier": current_risk_tier,
         "email": payment_entity.get("email"),
         "contact": payment_entity.get("contact"),
         "guardrail_flags": None,
@@ -1012,6 +1021,7 @@ DEFAULT_TEST_CASE = {
     "customer_id": None,
     "customer_key": None,
     "customer_history_source": "synthetic_test_default",
+    "current_risk_tier": "normal",
     "email": None,
     "contact": None,
     "guardrail_flags": None,

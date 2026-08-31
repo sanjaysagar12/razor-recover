@@ -288,6 +288,12 @@ def build_audit_row(
         "payment_rail": case_facts["payment_rail"],
         "retry_attempt_number": case_facts["retry_attempt_number"],
         "cumulative_retries_this_txn": case_facts["cumulative_retries_this_txn"],
+        # Phase 17 -- defaults to "normal" for the synthetic batch (case_facts
+        # here never carries a real customer_id) and for any live case whose
+        # customer_history lookup found no risk-tier history yet, same
+        # "unseen means neutral" default customer_ptp_stats.get_risk_tier
+        # itself returns.
+        "current_risk_tier": case_facts.get("current_risk_tier", "normal"),
     }
 
     # -- Pipeline's own guardrail pass -------------------------------------

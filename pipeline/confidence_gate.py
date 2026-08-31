@@ -127,6 +127,7 @@ def route_case(
     band_low: float,
     band_high: float,
     is_ambiguous: bool | None = None,
+    risk_tier: str | None = None,
 ) -> dict:
     """is_ambiguous: override for the ambiguous_code trigger, supplied by a
     caller that has a better source of truth than the synthetic-taxonomy
@@ -136,13 +137,27 @@ def route_case(
     synthetic prefixes ("05", ...) in the first place. None (the default)
     preserves the original prefix-match behavior exactly -- run_full_batch
     below never passes this, so the synthetic batch simulation is
-    byte-for-byte unaffected by this parameter's existence."""
+    byte-for-byte unaffected by this parameter's existence.
+
+    risk_tier (Phase 17): pipeline.customer_ptp_stats.get_risk_tier's value
+    for this case's customer, an ADDITIONAL routing signal layered on top of
+    probability_band/ambiguous_code, never a replacement for them. 'watch'
+    lowers the bar for LLM/human involvement -- it always routes to the LLM
+    layer, even when the tree score alone falls outside the probability
+    band -- because a customer already flagged as unreliable deserves a
+    reasoned look rather than a template action. None/'normal'/'restricted'
+    leave routing completely unchanged from pre-Phase-17 behavior: 'restricted'
+    doesn't need a routing change here since guardrails.py's
+    customer_risk_restricted rule overrides final_action regardless of what
+    this layer (or the LLM) decides."""
     routing_trigger: list[str] = []
     if _in_probability_band(tree_probability, band_low, band_high):
         routing_trigger.append("probability_band")
     ambiguous_code_flag = is_ambiguous if is_ambiguous is not None else _is_ambiguous_code(decline_code)
     if ambiguous_code_flag:
         routing_trigger.append("ambiguous_code")
+    if risk_tier == "watch":
+        routing_trigger.append("watch_tier_customer")
 
     routed_to_llm = len(routing_trigger) > 0
 
