@@ -15,9 +15,9 @@ No real Razorpay API calls, no LLM calls -- entirely deterministic, per the
 Phase 17 brief.
 
 Run with:
-    python pipeline/test_risk_tier.py
+    python tests/test_risk_tier.py
 or via pytest:
-    python -m pytest pipeline/test_risk_tier.py -v
+    python -m pytest tests/test_risk_tier.py -v
 """
 
 from __future__ import annotations
@@ -26,12 +26,9 @@ import sys
 import uuid
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import confidence_gate
-import customer_ptp_stats
-import guardrails
-import promise_store
+from pipeline import confidence_gate, customer_ptp_stats, guardrails, promise_store
 
 
 def _new_customer_id(label: str) -> str:

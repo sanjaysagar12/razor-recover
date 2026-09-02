@@ -7,9 +7,9 @@ customer_ids per test so runs never collide with each other or with real
 webhook traffic already in data/customer_history.db).
 
 Run with:
-    python pipeline/test_ptp_trigger.py
+    python tests/test_ptp_trigger.py
 or via pytest:
-    python -m pytest pipeline/test_ptp_trigger.py -v
+    python -m pytest tests/test_ptp_trigger.py -v
 """
 
 from __future__ import annotations
@@ -18,12 +18,9 @@ import sys
 import uuid
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import customer_ptp_stats
-import guardrails
-import promise_store
-import ptp_trigger
+from pipeline import customer_ptp_stats, guardrails, promise_store, ptp_trigger
 
 
 def _new_customer_id(label: str) -> str:

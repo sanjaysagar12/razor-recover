@@ -15,9 +15,9 @@ retry-once, never-raise) still runs for real -- only the network call is
 stubbed.
 
 Run with:
-    python pipeline/test_ptp_guardrails.py
+    python tests/test_ptp_guardrails.py
 or via pytest:
-    python -m pytest pipeline/test_ptp_guardrails.py -v
+    python -m pytest tests/test_ptp_guardrails.py -v
 """
 
 from __future__ import annotations
@@ -25,10 +25,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import guardrails
-import llm_layer
+from pipeline import guardrails, llm_layer
 
 # Fixed "today" so every date-math assertion below (30-day cap, past-date,
 # +45-days, etc.) is deterministic regardless of when this suite runs.

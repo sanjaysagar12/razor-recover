@@ -17,9 +17,9 @@ reasoning as test_ptp_guardrails.py / test_promise_reschedule.py:
     never create a payment link).
 
 Run with:
-    python pipeline/test_promise_clarification.py
+    python tests/test_promise_clarification.py
 or via pytest:
-    python -m pytest pipeline/test_promise_clarification.py -v
+    python -m pytest tests/test_promise_clarification.py -v
 """
 
 from __future__ import annotations
@@ -33,6 +33,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(BASE_DIR / "pipeline"))
 
+# promise_store/razorpay_client bare (not `from pipeline import ...`) so
+# these are the exact same module objects webhook_receiver.py/execute_action.py
+# bare-import internally -- required for the razorpay_client.get_client
+# monkeypatches below to actually reach the /api/promise-reply code path
+# under test instead of silently no-op'ing against a separate copy.
 import promise_store  # noqa: E402
 import razorpay_client  # noqa: E402
 import webhook_receiver  # noqa: E402

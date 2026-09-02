@@ -24,7 +24,7 @@ a separate rule list/apply function rather than reusing GUARDRAIL_RULES.
 
 Smoke test:
     python tests/test_guardrails.py
-    python pipeline/test_ptp_guardrails.py
+    python tests/test_ptp_guardrails.py
 """
 
 from __future__ import annotations
