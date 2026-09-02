@@ -61,17 +61,17 @@ still contains all fields from the Phase 5 spec's schema.
 ## Smoke test a single case
 
 ```bash
-python -m pipeline.llm_layer --case-file sample_case.json
+python -m pipeline.llm_layer --case-file tests/fixtures/sample_case.json
 ```
 
-`sample_case.json` must contain `{case_id, tree_model_score,
+`tests/fixtures/sample_case.json` must contain `{case_id, tree_model_score,
 shap_top_features, case_facts}` — see `SAMPLE_CASE` in `test_llm_layer.py`
 for the exact shape.
 
 ## Running the batch
 
 ```bash
-python pipeline/run_phase5.py
+python scripts/run_phase5.py
 ```
 
 Reads `logs/phase4_output.json`, writes `logs/phase5_output.json`. Cases
@@ -82,7 +82,7 @@ the LLM.
 ## Tests
 
 ```bash
-python -m pytest pipeline/test_llm_layer.py -v
+python -m pytest tests/test_llm_layer.py -v
 ```
 
 Live-calls whichever provider has a real key set in `.env` (a placeholder

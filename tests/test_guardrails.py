@@ -2,9 +2,9 @@
 Phase 6 tests -- Guardrail layer.
 
 Plain-assert tests, runnable either directly:
-    python pipeline/test_guardrails.py
+    python tests/test_guardrails.py
 or via pytest:
-    python -m pytest pipeline/test_guardrails.py -v
+    python -m pytest tests/test_guardrails.py -v
 """
 
 from __future__ import annotations
@@ -12,9 +12,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import guardrails
+from pipeline import guardrails
 
 
 def _base_case(**overrides) -> dict:

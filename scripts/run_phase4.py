@@ -6,7 +6,7 @@ confidence_gate.py (probability-band / ambiguous-code routing) together into
 one combined record per case, and writes the result to logs/phase4_output.json.
 
 Run with:
-    python pipeline/run_phase4.py
+    python scripts/run_phase4.py
 """
 
 from __future__ import annotations
@@ -15,10 +15,9 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import confidence_gate
-import shap_extract
+from pipeline import confidence_gate, shap_extract
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 LOGS_DIR = BASE_DIR / "logs"

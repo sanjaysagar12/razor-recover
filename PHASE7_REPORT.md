@@ -70,7 +70,7 @@ of being written off; a hard decline still gets `no_retry_prompt_update`
 unconditionally, regardless of score, without relying on `guardrails.py` to
 correct it downstream.
 
-`pipeline/test_guardrails.py` (21 tests, including `tests/test_phase4.py`)
+`tests/test_guardrails.py` (21 tests, including `tests/test_phase4.py`)
 still passes unchanged — no test asserted the specific non-routed template
 string, only routing behavior, which is untouched.
 

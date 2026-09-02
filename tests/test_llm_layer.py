@@ -7,7 +7,7 @@ mocked adapter otherwise, so the suite never hard-fails just because a key
 isn't configured locally.
 
 Run with:
-    python -m pytest pipeline/test_llm_layer.py -v
+    python -m pytest tests/test_llm_layer.py -v
 """
 
 from __future__ import annotations
@@ -17,11 +17,9 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import llm_layer
-import schema
+from pipeline import llm_layer, schema
 
 SAMPLE_CASE = {
     "case_id": "case_test_0001",

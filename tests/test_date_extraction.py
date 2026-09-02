@@ -1,7 +1,7 @@
 """
 Promise-to-pay date extraction tests -- pipeline.llm_layer.extract_promise_date.
 
-Live-calls the configured LLM_PROVIDER (matches pipeline/test_llm_layer.py's
+Live-calls the configured LLM_PROVIDER (matches tests/test_llm_layer.py's
 convention: real call when a usable key is present, informational-only
 skip note otherwise) against the ten manual-inspection cases from the task
 spec, and asserts the no-crash / schema-shape contract that must hold

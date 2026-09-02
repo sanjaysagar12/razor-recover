@@ -13,7 +13,7 @@ run_phase5.py to match this repo's run_phaseN.py convention (see
 run_phase4.py).
 
 Run with:
-    python pipeline/run_phase5.py
+    python scripts/run_phase5.py
 """
 
 from __future__ import annotations
@@ -23,10 +23,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import llm_layer
-import shap_extract
+from pipeline import llm_layer, shap_extract
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 LOGS_DIR = BASE_DIR / "logs"

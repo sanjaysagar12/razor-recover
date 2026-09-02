@@ -130,7 +130,7 @@ def build_promise_date_user_prompt(message: str, case_context: dict) -> str:
 
 def build_user_prompt(case: dict) -> str:
     """case: {case_id, tree_model_score, shap_top_features, case_facts} --
-    see pipeline/run_phase5.py for how this is assembled from the Phase 4
+    see scripts/run_phase5.py for how this is assembled from the Phase 4
     output plus the raw case facts (shap_extract.get_case_facts)."""
     shap_for_prompt = [
         {"feature": f["feature"], "shap_value": f["shap_value"]} for f in case["shap_top_features"]

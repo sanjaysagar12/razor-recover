@@ -5,14 +5,17 @@ Confirms the local environment and Razorpay TEST MODE credentials are wired
 up correctly end to end: creates a test plan, then fetches it back.
 
 Run with:
-    python pipeline/verify_setup.py
+    python scripts/verify_setup.py
 """
 
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 
-from razorpay_client import create_test_plan, fetch_plan
+from pipeline.razorpay_client import create_test_plan, fetch_plan
 
 load_dotenv()
 
