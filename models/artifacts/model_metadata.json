@@ -1,6 +1,6 @@
 {
   "random_seed": 42,
-  "generated_at": "2026-08-25",
+  "generated_at": "2026-09-02",
   "data_source": [
     "data/train.csv",
     "data/holdout.csv"
@@ -38,7 +38,7 @@
   },
   "models": {
     "logreg": {
-      "version": "logreg_v1_2026-08-25",
+      "version": "logreg_v1_2026-09-02",
       "artifact_path": "models/artifacts/logreg_pipeline.joblib",
       "hyperparameters": {
         "penalty": "l2",
@@ -57,7 +57,7 @@
       }
     },
     "xgboost": {
-      "version": "xgb_v1_2026-08-25",
+      "version": "xgb_v1_2026-09-02",
       "artifact_path": "models/artifacts/xgb_pipeline.joblib",
       "hyperparameters": {
         "max_depth": 3,
@@ -89,6 +89,6 @@
     "f1_std_exceeds_2x": false,
     "brier_std_exceeds_2x": false
   },
-  "primary_model": "logreg_v1_2026-08-25",
+  "primary_model": "logreg_v1_2026-09-02",
   "primary_model_key": "logreg"
 }

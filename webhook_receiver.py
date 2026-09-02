@@ -23,11 +23,14 @@ Run:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
+import io
 import json
 import logging
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
@@ -35,16 +38,19 @@ from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 BASE_DIR = Path(__file__).resolve().parent
 PIPELINE_DIR = BASE_DIR / "pipeline"
+MODELS_DIR_PATH = BASE_DIR / "models"
 sys.path.insert(0, str(PIPELINE_DIR))
+sys.path.insert(0, str(MODELS_DIR_PATH))
 
 import confidence_gate  # noqa: E402
 import customer_directory  # noqa: E402
 import customer_history  # noqa: E402
 import customer_ptp_stats  # noqa: E402
+import dashboard_training  # noqa: E402
 import decline_code_mapper  # noqa: E402
 import execute_action  # noqa: E402
 import guardrails  # noqa: E402
@@ -54,6 +60,7 @@ import ptp_outcomes  # noqa: E402
 import ptp_trigger  # noqa: E402
 import run_batch  # noqa: E402
 import run_case  # noqa: E402
+import train_tree_models  # noqa: E402
 
 load_dotenv()
 
@@ -1691,29 +1698,364 @@ def api_reset_conversations():
 
 
 # --------------------------------------------------------------------------
+# Dashboard "Run batch" panel -- lets an operator kick off
+# pipeline/run_batch.py (the Phase 7 orchestrator: scores + SHAP + routes +
+# guardrails the whole 280-row synthetic batch, then writes logs/audit_log.csv
+# and demo/pitch_numbers.md) from the browser instead of a terminal, and see
+# its stdout report. This writes to logs/audit_log.csv, a SEPARATE file from
+# logs/webhook_audit_log.csv (the live pipeline's log the rest of the
+# dashboard reads) -- see the module docstring at the top of this file -- so
+# running a batch here never touches/clears anything the Dashboard/Logs pages
+# show.
+#
+# Runs in a background thread (module already imports run_batch at startup,
+# so this reuses that same in-process module rather than shelling out) since
+# a full batch run can take a while (some cases route to a real LLM call) and
+# must not block the Flask request thread. _batch_run_lock also serializes
+# runs -- run_batch.py writes shared CSV/MD files, so two concurrent runs
+# could interleave writes.
+#
+# _batch_run_state is also mirrored to BATCH_STATE_PATH on every change, so
+# GET /api/run-batch/status reflects "running" across a browser refresh AND
+# a server restart -- an in-memory-only dict would silently reset to "idle"
+# on restart even if (from the operator's perspective) nothing ever finished.
+# A restart mid-run is the one case that file can't tell the truth about
+# (the background thread is gone with the old process) -- _load_batch_state
+# detects a persisted "running" status at startup and downgrades it to
+# "error" rather than leaving a permanently-stuck "running" indicator.
+# --------------------------------------------------------------------------
+BATCH_STATE_PATH = LOGS_DIR / "run_batch_state.json"
+
+_batch_run_lock = threading.Lock()
+_batch_run_state = {
+    "status": "idle",  # idle | running | done | error
+    "started_at": None,
+    "finished_at": None,
+    "duration_seconds": None,
+    "output": "",
+    "error": None,
+}
+
+
+def _save_batch_state() -> None:
+    try:
+        BATCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        BATCH_STATE_PATH.write_text(json.dumps(_batch_run_state), encoding="utf-8")
+    except Exception:
+        logger.exception("Failed to persist run-batch state to %s", BATCH_STATE_PATH)
+
+
+def _load_batch_state() -> None:
+    if not BATCH_STATE_PATH.exists():
+        return
+    try:
+        loaded = json.loads(BATCH_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("Failed to load persisted run-batch state from %s", BATCH_STATE_PATH)
+        return
+    if loaded.get("status") == "running":
+        loaded["status"] = "error"
+        loaded["error"] = "Server restarted while this run was in progress -- outcome unknown."
+        loaded["finished_at"] = datetime.now(timezone.utc).isoformat()
+    _batch_run_state.update(loaded)
+
+
+_load_batch_state()
+
+
+def _run_batch_worker() -> None:
+    start = time.monotonic()
+    _batch_run_state.update(
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=None,
+        duration_seconds=None,
+        output="",
+        error=None,
+    )
+    _save_batch_state()
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            run_batch.main()
+        _batch_run_state["status"] = "done"
+    except Exception as e:  # noqa: BLE001 -- surfaced to the dashboard, not swallowed
+        logger.exception("Batch run failed")
+        _batch_run_state["status"] = "error"
+        _batch_run_state["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        _batch_run_state["output"] = buf.getvalue()
+        _batch_run_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _batch_run_state["duration_seconds"] = time.monotonic() - start
+        _save_batch_state()
+        _batch_run_lock.release()
+
+
+def _last_batch_run_on_disk() -> dict:
+    """Falls back to whatever pipeline/run_batch.py last wrote to disk --
+    covers the dashboard being opened fresh (no in-memory run this server
+    session yet), e.g. right after a restart, or a run triggered from the
+    CLI per the module's own docstring ("Run with: python pipeline/run_batch.py")."""
+    info = {"pitch_numbers": None, "generated_at": None, "n_cases": None}
+    pn_path = run_batch.PITCH_NUMBERS_PATH
+    if pn_path.exists():
+        text = pn_path.read_text(encoding="utf-8")
+        info["pitch_numbers"] = text
+        for line in text.splitlines()[:6]:
+            if line.startswith("Generated:"):
+                info["generated_at"] = line.split("Generated:", 1)[1].strip()
+                break
+    if run_batch.AUDIT_LOG_PATH.exists():
+        try:
+            info["n_cases"] = int(len(pd.read_csv(run_batch.AUDIT_LOG_PATH)))
+        except Exception:
+            pass
+    return info
+
+
+@app.route("/api/run-batch", methods=["POST"])
+def api_run_batch():
+    if not _batch_run_lock.acquire(blocking=False):
+        return jsonify({"status": "already_running", "message": "A batch run is already in progress."}), 409
+    logger.warning("Batch run triggered from dashboard remote_addr=%s", request.remote_addr)
+    threading.Thread(target=_run_batch_worker, daemon=True, name="run-batch-worker").start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/run-batch/status", methods=["GET"])
+def api_run_batch_status():
+    state = dict(_batch_run_state)
+    state.update(_last_batch_run_on_disk())
+    return jsonify(state)
+
+
+# --------------------------------------------------------------------------
+# Dashboard "Model" page -- retrain the official LogReg-vs-XGBoost pair
+# (delegates to train_tree_models.main(), completely unchanged) or upload
+# and train a custom CSV (models/dashboard_training.py, writing to
+# models/custom_runs/<upload_id>/ -- never touches data/train.csv,
+# data/holdout.csv, models/artifacts/, or models/model_report.md). Same
+# background-thread + lock + persisted-state pattern as Run Batch above.
+#
+# Retraining the OFFICIAL model overwrites models/artifacts/*.joblib and
+# models/model_report.md -- i.e. it replaces what the live pipeline will
+# load on its NEXT restart (shap_extract.py caches the pipeline in-process
+# once loaded, so an already-running server keeps scoring with whatever it
+# already loaded). The frontend confirms before triggering this.
+# --------------------------------------------------------------------------
+MODEL_TRAIN_STATE_PATH = LOGS_DIR / "model_train_state.json"
+
+_model_train_lock = threading.Lock()
+_model_train_state = {
+    "status": "idle",  # idle | running | done | error
+    "kind": None,  # "official" | "custom"
+    "upload_id": None,
+    "started_at": None,
+    "finished_at": None,
+    "duration_seconds": None,
+    "output": "",
+    "error": None,
+}
+
+
+def _save_model_train_state() -> None:
+    try:
+        MODEL_TRAIN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        MODEL_TRAIN_STATE_PATH.write_text(json.dumps(_model_train_state), encoding="utf-8")
+    except Exception:
+        logger.exception("Failed to persist model-train state to %s", MODEL_TRAIN_STATE_PATH)
+
+
+def _load_model_train_state() -> None:
+    if not MODEL_TRAIN_STATE_PATH.exists():
+        return
+    try:
+        loaded = json.loads(MODEL_TRAIN_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("Failed to load persisted model-train state from %s", MODEL_TRAIN_STATE_PATH)
+        return
+    if loaded.get("status") == "running":
+        loaded["status"] = "error"
+        loaded["error"] = "Server restarted while this run was in progress -- outcome unknown."
+        loaded["finished_at"] = datetime.now(timezone.utc).isoformat()
+    _model_train_state.update(loaded)
+
+
+_load_model_train_state()
+
+
+def _model_train_worker(kind: str, upload_id: "str | None" = None) -> None:
+    start = time.monotonic()
+    _model_train_state.update(
+        status="running", kind=kind, upload_id=upload_id,
+        started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=None, duration_seconds=None, output="", error=None,
+    )
+    _save_model_train_state()
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            if kind == "official":
+                train_tree_models.main()
+            else:
+                dashboard_training.run_custom_training(upload_id)
+        _model_train_state["status"] = "done"
+    except Exception as e:  # noqa: BLE001 -- surfaced to the dashboard, not swallowed
+        logger.exception("Model training failed (kind=%s upload_id=%s)", kind, upload_id)
+        _model_train_state["status"] = "error"
+        _model_train_state["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        _model_train_state["output"] = buf.getvalue()
+        _model_train_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _model_train_state["duration_seconds"] = time.monotonic() - start
+        _save_model_train_state()
+        _model_train_lock.release()
+
+
+def _official_report_on_disk() -> dict:
+    info = {"report_md": None, "metadata": None}
+    report_path = train_tree_models.REPORT_PATH
+    metadata_path = train_tree_models.ARTIFACTS_DIR / "model_metadata.json"
+    if report_path.exists():
+        info["report_md"] = report_path.read_text(encoding="utf-8")
+    if metadata_path.exists():
+        try:
+            info["metadata"] = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return info
+
+
+@app.route("/api/model/dataset", methods=["GET"])
+def api_model_dataset():
+    df = train_tree_models.load_data()
+    class_counts = df[train_tree_models.TARGET_COL].value_counts().to_dict()
+    return jsonify({
+        "columns": df.columns.tolist(),
+        "rows": json.loads(df.to_json(orient="records")),
+        "row_count": len(df),
+        "class_counts": {str(int(k)): int(v) for k, v in class_counts.items()},
+        "feature_columns": {
+            "numeric": train_tree_models.NUMERIC_FEATURES,
+            "categorical": train_tree_models.CATEGORICAL_FEATURES,
+        },
+        "target_column": train_tree_models.TARGET_COL,
+        "source": ["data/train.csv", "data/holdout.csv"],
+    })
+
+
+@app.route("/api/model/report", methods=["GET"])
+def api_model_report():
+    return jsonify(_official_report_on_disk())
+
+
+@app.route("/api/model/train", methods=["POST"])
+def api_model_train():
+    if not _model_train_lock.acquire(blocking=False):
+        return jsonify({"status": "already_running", "message": "A training run is already in progress."}), 409
+    logger.warning("Official model retrain triggered from dashboard remote_addr=%s", request.remote_addr)
+    threading.Thread(
+        target=_model_train_worker, kwargs={"kind": "official"},
+        daemon=True, name="model-train-official",
+    ).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/model/train/status", methods=["GET"])
+def api_model_train_status():
+    state = dict(_model_train_state)
+    state["official_report"] = _official_report_on_disk()
+    return jsonify(state)
+
+
+@app.route("/api/model/upload", methods=["POST"])
+def api_model_upload():
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify({"ok": False, "error": "No file uploaded"}), 400
+    if not file.filename.lower().endswith(".csv"):
+        return jsonify({"ok": False, "error": "Only .csv files are supported"}), 400
+    entry = dashboard_training.save_upload(file)
+    if "upload_id" not in entry:
+        return jsonify(entry), 400
+    logger.info(
+        "Dataset uploaded: %s (upload_id=%s valid=%s rows=%s) remote_addr=%s",
+        entry.get("filename"), entry.get("upload_id"), entry.get("valid"), entry.get("row_count"),
+        request.remote_addr,
+    )
+    return jsonify(entry)
+
+
+@app.route("/api/model/uploads", methods=["GET"])
+def api_model_uploads():
+    return jsonify({"uploads": dashboard_training.list_uploads()})
+
+
+@app.route("/api/model/train-custom", methods=["POST"])
+def api_model_train_custom():
+    body = request.get_json(silent=True) or {}
+    upload_id = body.get("upload_id")
+    if not upload_id:
+        return jsonify({"status": "error", "message": "upload_id is required"}), 400
+    entry = dashboard_training.get_upload(upload_id)
+    if entry is None:
+        return jsonify({"status": "error", "message": f"Unknown upload_id={upload_id!r}"}), 404
+    if not entry.get("valid"):
+        return jsonify({
+            "status": "error",
+            "message": entry.get("validation", {}).get("error") or "Dataset failed validation",
+        }), 400
+    if not _model_train_lock.acquire(blocking=False):
+        return jsonify({"status": "already_running", "message": "A training run is already in progress."}), 409
+    logger.warning("Custom model training triggered: upload_id=%s remote_addr=%s", upload_id, request.remote_addr)
+    threading.Thread(
+        target=_model_train_worker, kwargs={"kind": "custom", "upload_id": upload_id},
+        daemon=True, name=f"model-train-custom-{upload_id}",
+    ).start()
+    return jsonify({"status": "started", "upload_id": upload_id})
+
+
+@app.route("/api/model/custom-report/<upload_id>", methods=["GET"])
+def api_model_custom_report(upload_id):
+    report = dashboard_training.get_custom_report(upload_id)
+    if report is None:
+        return jsonify({"message": "No completed run for this upload_id yet"}), 404
+    return jsonify(report)
+
+
+# --------------------------------------------------------------------------
 # Task 5 -- dashboard page. No authentication (removed at user's request --
 # this endpoint, the /api/* endpoints, and the audit/webhook logs are all
 # publicly readable/triggerable at https://razor-recover.heracle.fit).
+#
+# The dashboard is a React + Tailwind SPA (dashboard-app/, built with Vite)
+# served here as static files -- `npm run build` inside dashboard-app/
+# produces dashboard-app/dist/index.html plus hashed assets under
+# dist/assets/, built with base '/dashboard/' so those asset URLs resolve
+# to the routes below. /dashboard, /conversations, /logs and /run-batch all
+# serve the SAME built index.html -- the SPA's own client-side router
+# (AppRouter.jsx) reads window.location.pathname and renders the matching
+# page, so all four routes share one design system and one Sidebar (which is
+# also how the Sidebar's "Live" indicator can reflect a pause toggle shared
+# across pages). The old plain server-rendered dashboard/conversations.html
+# and dashboard/logs.html are superseded by dashboard-app/src/pages/.
 # --------------------------------------------------------------------------
-DASHBOARD_HTML_PATH = BASE_DIR / "dashboard" / "index.html"
+DASHBOARD_DIST_DIR = BASE_DIR / "dashboard-app" / "dist"
 
 
 @app.route("/dashboard", methods=["GET"])
-def dashboard():
-    return Response(DASHBOARD_HTML_PATH.read_text(encoding="utf-8"), mimetype="text/html")
-
-
-# --------------------------------------------------------------------------
-# Phase 20 -- separate Customer Conversations page (dashboard/index.html is
-# already dense; this is a distinct view, its own file, same no-auth posture
-# as /dashboard above).
-# --------------------------------------------------------------------------
-CONVERSATIONS_HTML_PATH = BASE_DIR / "dashboard" / "conversations.html"
-
-
+@app.route("/dashboard/", methods=["GET"])
 @app.route("/conversations", methods=["GET"])
-def conversations_page():
-    return Response(CONVERSATIONS_HTML_PATH.read_text(encoding="utf-8"), mimetype="text/html")
+@app.route("/logs", methods=["GET"])
+@app.route("/run-batch", methods=["GET"])
+@app.route("/model", methods=["GET"])
+def dashboard():
+    return send_from_directory(DASHBOARD_DIST_DIR, "index.html")
+
+
+@app.route("/dashboard/assets/<path:filename>", methods=["GET"])
+def dashboard_assets(filename):
+    return send_from_directory(DASHBOARD_DIST_DIR / "assets", filename)
 
 
 def _startup_checks() -> None:

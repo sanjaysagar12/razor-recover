@@ -1,6 +1,6 @@
 # Phase 3 Model Report
 
-Run date: 2026-08-25 | Random seed: 42
+Run date: 2026-09-02 | Random seed: 42
 
 Split sizes: train=196, val=42, test=42
 
@@ -27,7 +27,7 @@ Not flagged: XGBoost's cross-validation standard deviation stays within 2x of lo
 A constant prediction equal to the training set's class prior gives a Brier score of
 **0.2449** on the test set. Both trained models should beat this to be worth deploying.
 
-## Calibration check (logreg_v1_2026-08-25, primary model)
+## Calibration check (logreg_v1_2026-09-02, primary model)
 
 Predictions bucketed into quantile bins by predicted probability:
 
@@ -40,4 +40,4 @@ Predictions bucketed into quantile bins by predicted probability:
 
 ## Verdict
 
-**PRIMARY_MODEL = logreg_v1_2026-08-25 (Logistic Regression).** On the held-out test set, logistic regression's Brier score (0.2108) is equal to or better than XGBoost's (0.2140). XGBoost does NOT clearly beat logistic regression on this dataset -- with only ~280 rows, the extra flexibility of a tree ensemble does not translate into better-calibrated probabilities than a simple, heavily regularized linear model. Rather than pick XGBoost by default, logistic regression is selected as PRIMARY_MODEL because it wins (or ties) on the proper scoring rule.
+**PRIMARY_MODEL = logreg_v1_2026-09-02 (Logistic Regression).** On the held-out test set, logistic regression's Brier score (0.2108) is equal to or better than XGBoost's (0.2140). XGBoost does NOT clearly beat logistic regression on this dataset -- with only ~280 rows, the extra flexibility of a tree ensemble does not translate into better-calibrated probabilities than a simple, heavily regularized linear model. Rather than pick XGBoost by default, logistic regression is selected as PRIMARY_MODEL because it wins (or ties) on the proper scoring rule.
