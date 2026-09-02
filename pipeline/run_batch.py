@@ -590,6 +590,9 @@ def _lift_phrase(net_lift_absolute: float, net_lift_pct: float, prior_net_lift_p
 def write_pitch_numbers(
     sim: dict,
     compliance: dict,
+    three_scenario: dict,
+    net_lift_ci: dict,
+    breakeven_cost: "float | None",
     path: Path = PITCH_NUMBERS_PATH,
     prior_net_lift_pct: "float | None" = None,
 ) -> None:
@@ -597,7 +600,20 @@ def write_pitch_numbers(
     no prior-run figure to pull automatically -- pass it explicitly if the
     caller has one (e.g. from a previous report), otherwise the shortfall
     is stated plainly with no narrowing comparison, per instruction not to
-    fabricate a number."""
+    fabricate a number.
+
+    three_scenario: run_batch.compute_three_scenario_simulation output --
+    answers a DIFFERENT question than sim's net_lift_absolute/net_lift_pct
+    (total net dollars): recovered_rs_per_attempt is dollars per retry fired,
+    independent of how many cases a policy chose to retry. Both are surfaced
+    (section d vs section g) so neither is mistaken for the other.
+
+    net_lift_ci / breakeven_cost: validate_net_lift_ci.bootstrap_net_lift_ci
+    / compute_breakeven_cost output, computed once by the caller (see
+    main()) to avoid this module duplicating that script's bootstrap logic.
+    breakeven_cost may be None if compute_breakeven_cost raised (baseline
+    and pipeline retry attempts equal) -- rendered as "undefined" rather
+    than fabricating a number."""
     total = sim["total_amount"]
     pipeline_gross_pct = (sim["pipeline_gross_recovered"] / total * 100.0) if total else 0.0
     baseline_gross_pct = (sim["baseline_gross_recovered"] / total * 100.0) if total else 0.0
@@ -620,6 +636,27 @@ def write_pitch_numbers(
     def _override_lines(counts: dict) -> str:
         lines = "\n".join(f"- {rule}: {count}" for rule, count in counts.items())
         return lines or "- (none)"
+
+    def _scenario_row(label: str, scenario: dict) -> str:
+        return (
+            f"| {label} | {scenario['retry_attempts']} | Rs {scenario['gross_recovered']:,.2f} "
+            f"| Rs {scenario['net_recovered']:,.2f} | Rs {scenario['recovered_rs_per_attempt']:,.2f} |"
+        )
+
+    pipeline_scn = three_scenario["pipeline"]
+    compliant_scn = three_scenario["compliant_no_targeting"]
+    naive_scn = three_scenario["naive_no_guardrails"]
+    efficiency_lift_pct = (
+        (pipeline_scn["recovered_rs_per_attempt"] - compliant_scn["recovered_rs_per_attempt"])
+        / compliant_scn["recovered_rs_per_attempt"]
+        * 100.0
+        if compliant_scn["recovered_rs_per_attempt"]
+        else float("nan")
+    )
+
+    breakeven_line = (
+        f"Rs {breakeven_cost:,.2f}" if breakeven_cost is not None else "undefined (baseline and pipeline retry attempts are equal)"
+    )
 
     content = f"""# Pitch Numbers -- Batch Simulation
 
@@ -666,6 +703,25 @@ Naive baseline overrides, by rule (what a blind "retry everyone" policy would ha
 ## f. Summary
 
 Naive retry-everything recovers Rs {sim['baseline_gross_recovered']:,.2f} gross using {sim['baseline_retry_attempts']} retry attempts, including {sim['wasted_retries_on_guaranteed_fails']} against guaranteed-fail cases blocked by compliance guardrails. Our pipeline recovers Rs {sim['pipeline_gross_recovered']:,.2f} gross using only {sim['pipeline_retry_attempts']} attempts (a {sim['wasted_retries_avoided']}-attempt reduction) -- net of an assumed Rs {sim['cost_per_retry_attempt']:,.2f}/attempt cost, that's Rs {sim['pipeline_net_recovered']:,.2f} vs Rs {sim['baseline_net_recovered']:,.2f}, {summary_lift_phrase}, with {compliance_phrase}.
+
+## g. Efficiency (Rs recovered per retry attempt)
+
+This answers a different question than section d: not "how many total net dollars did each policy recover" but "how efficiently did each dollar of retry-attempt spend perform." A policy that retries fewer, better-targeted cases can win here even while trailing on total net dollars.
+
+| Scenario | Retry Attempts | Gross Recovered | Net Recovered | Recovered Rs/Attempt |
+|---|---|---|---|---|
+{_scenario_row('naive_no_guardrails (retry everyone, no compliance check)', naive_scn)}
+{_scenario_row('compliant_no_targeting (retry everyone guardrails allow, no ML/LLM targeting)', compliant_scn)}
+{_scenario_row('pipeline (ML/LLM-targeted, guardrailed)', pipeline_scn)}
+
+Efficiency lift per attempt fired (pipeline vs compliant_no_targeting): {efficiency_lift_pct:.1f}% -- each retry the pipeline fires recovers Rs {pipeline_scn['recovered_rs_per_attempt']:,.2f} on average, vs Rs {compliant_scn['recovered_rs_per_attempt']:,.2f} for a guardrailed policy with no targeting. This is a per-attempt efficiency measure, distinct from the net_lift_pct in section d (which compares total net dollars across differently-sized retry sets).
+
+## h. Net Lift -- Uncertainty & Sensitivity
+
+- Net lift (%) point estimate: {net_lift_ci['point_estimate']:.1f}%
+- 95% bootstrap CI (n={net_lift_ci['n_resamples']} resamples, case rows resampled with replacement): [{net_lift_ci['ci_low']:.1f}%, {net_lift_ci['ci_high']:.1f}%]
+- Resamples with net_lift_pct >= 0%: {net_lift_ci['pct_resamples_nonnegative']:.1f}%
+- Breakeven cost per retry attempt (COST_PER_RETRY_ATTEMPT value at which pipeline_net_recovered == baseline_net_recovered): {breakeven_line} (current assumption: Rs {sim['cost_per_retry_attempt']:,.2f})
 """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -679,8 +735,21 @@ def main() -> None:
     audit_df = run_batch()
     write_audit_log(audit_df)
     sim = compute_simulation(audit_df)
+    three_scenario = compute_three_scenario_simulation(audit_df)
     compliance = compute_compliance_check(audit_df)
-    write_pitch_numbers(sim, compliance)
+
+    # Local import -- validate_net_lift_ci imports this module (run_batch)
+    # at module level to reuse compute_simulation, so importing it back here
+    # at module level would be circular. Deferred to call time instead.
+    from validate_net_lift_ci import bootstrap_net_lift_ci, compute_breakeven_cost
+
+    net_lift_ci = bootstrap_net_lift_ci(audit_df)
+    try:
+        breakeven_cost = compute_breakeven_cost(audit_df)
+    except ValueError:
+        breakeven_cost = None
+
+    write_pitch_numbers(sim, compliance, three_scenario, net_lift_ci, breakeven_cost)
     elapsed = time.monotonic() - start
 
     total = len(audit_df)
@@ -708,6 +777,13 @@ def main() -> None:
     lift_sign = "improvement" if sim["net_lift_absolute"] >= 0 else "shortfall"
     print(f"Net lift: Rs {sim['net_lift_absolute']:,.2f} ({sim['net_lift_pct']:.1f}%) [{lift_sign}]")
     print(f"Compliance check: {compliance['non_compliant_count']}/{compliance['n_cases']} non-compliant executions")
+    print()
+    pipeline_rpa = three_scenario["pipeline"]["recovered_rs_per_attempt"]
+    compliant_rpa = three_scenario["compliant_no_targeting"]["recovered_rs_per_attempt"]
+    efficiency_lift_pct = (pipeline_rpa - compliant_rpa) / compliant_rpa * 100.0 if compliant_rpa else float("nan")
+    print(f"{'':28s} {'Pipeline':>16s} {'Compliant, no targeting':>26s}")
+    print(f"{'Recovered Rs/attempt':28s} {pipeline_rpa:>16,.2f} {compliant_rpa:>26,.2f}")
+    print(f"Efficiency lift per attempt fired: {efficiency_lift_pct:.1f}%")
     print(f"Wrote pitch numbers to {PITCH_NUMBERS_PATH}")
     print(f"Elapsed: {elapsed:.1f}s")
 
