@@ -102,7 +102,12 @@ def _post_promise_reply(client, case_id: str, customer_id: str, message: str):
 # --------------------------------------------------------------------------
 def test_1_three_vague_messages_cap_clarification_at_two_rounds():
     case_id = f"case_clarify_{uuid.uuid4().hex[:8]}"
-    customer_id = "cust_clarify_0001"
+    # uuid-suffixed (not a fixed literal) so promise_store.has_open_promise
+    # (webhook_receiver.api_promise_reply's PTP-offer gate) never sees a
+    # leftover unresolved promise from an earlier run of this same test --
+    # same isolation convention test_risk_tier.py/test_ptp_trigger.py etc.
+    # already use for every customer_id they create.
+    customer_id = f"cust_clarify_{uuid.uuid4().hex[:8]}"
     messages = ["soon", "maybe", "I'll try"]
     canned = {
         "soon": {
@@ -177,7 +182,7 @@ def test_1_three_vague_messages_cap_clarification_at_two_rounds():
 # --------------------------------------------------------------------------
 def test_2_clear_message_schedules_immediately_round_stays_zero():
     case_id = f"case_clarify_clean_{uuid.uuid4().hex[:8]}"
-    customer_id = "cust_clarify_clean_0001"
+    customer_id = f"cust_clarify_clean_{uuid.uuid4().hex[:8]}"
     message = "I'll pay on the 5th"
     canned = {
         message: {

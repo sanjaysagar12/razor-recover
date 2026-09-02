@@ -36,6 +36,7 @@ import customer_history
 import execute_action
 import llm_layer
 import promise_store
+import ptp_trigger
 import run_batch
 import shap_extract
 
@@ -67,6 +68,26 @@ WEBHOOK_AUDIT_COLUMNS = run_batch.AUDIT_COLUMNS + [
     "execution_detail",
     "execution_timestamp",
     "source",
+    # PTP offer-eligibility gate (pipeline/ptp_trigger.should_offer_ptp) --
+    # only ever set by run_recovery_case below; run_recovered_case (no
+    # decline, nothing to gate) and run_promise_reschedule (acting on a
+    # promise that was already offered/replied to) leave these None, same
+    # as every other column those two rows don't populate.
+    "ptp_offer_decision",
+    "ptp_trigger_category",
+    "ptp_offer_reason",
+    # Persisted so a LATER call (webhook_receiver.api_promise_reply, at
+    # reply time) can reconstruct the same case dict should_offer_ptp saw
+    # at scoring time, instead of guessing at defaults -- retry_attempt_
+    # number in particular must be the ORIGINAL value, not a re-guessed 1,
+    # or a case that was correctly offered PTP at scoring time (e.g. a 2nd
+    # consecutive failure) would wrongly re-evaluate as a first failure
+    # when its customer's reply comes in. Same None-for-other-row-types
+    # convention as decline_code_bucket etc. above.
+    "retry_attempt_number",
+    "ltv_tier",
+    "payment_rail",
+    "cumulative_retries_this_txn",
 ]
 
 WEBHOOK_AUDIT_LOG_PATH = LOGS_DIR / "webhook_audit_log.csv"
@@ -77,6 +98,19 @@ SOURCE_MANUAL_TEST = "manual_test"
 
 def _append_webhook_audit_row(row: dict) -> None:
     WEBHOOK_AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Same reindex-onto-the-new-header migration webhook_receiver.py's
+    # _append_promise_log already uses for logs/promise_log.csv -- when
+    # WEBHOOK_AUDIT_COLUMNS grows (as it just did for the ptp_offer_*
+    # columns), a file written under the OLD, shorter header would
+    # otherwise end up with data rows wider than its own header line the
+    # next time a row is appended, breaking every pd.read_csv() call
+    # against it (api_audit_log, api_case_detail, api_customers, ...).
+    # Existing rows backfill the new columns as blank, not guessed.
+    if WEBHOOK_AUDIT_LOG_PATH.exists():
+        existing = pd.read_csv(WEBHOOK_AUDIT_LOG_PATH)
+        if list(existing.columns) != WEBHOOK_AUDIT_COLUMNS:
+            existing.reindex(columns=WEBHOOK_AUDIT_COLUMNS).to_csv(WEBHOOK_AUDIT_LOG_PATH, index=False)
+
     df = pd.DataFrame([row], columns=WEBHOOK_AUDIT_COLUMNS)
     write_header = not WEBHOOK_AUDIT_LOG_PATH.exists()
     df.to_csv(WEBHOOK_AUDIT_LOG_PATH, mode="a", header=write_header, index=False)
@@ -221,6 +255,17 @@ def run_recovery_case(case_facts: dict, event_type: str, source: str = SOURCE_RE
         audit_row["guardrail_flags"], audit_row["requires_human_review"], audit_row["llm_schema_valid"],
     )
 
+    # PTP offer-eligibility gate -- immediately after the guardrail layer,
+    # before any chat UI would render. Purely a decision-transparency
+    # record for this phase (see pipeline/ptp_trigger.py's module docstring
+    # for what's explicitly out of scope): it does not affect final_action,
+    # execution, or anything below.
+    ptp_offer = ptp_trigger.should_offer_ptp(case_facts)
+    logger.info(
+        "case_id=%s: PTP-offer decision -- offer_ptp=%s trigger_category=%s reason=%s",
+        case_id, ptp_offer["offer_ptp"], ptp_offer["trigger_category"], ptp_offer["reason"],
+    )
+
     logger.info(
         "case_id=%s: step 5/6 -- executing final_action=%s via execute_action", case_id, audit_row["final_action"]
     )
@@ -255,6 +300,13 @@ def run_recovery_case(case_facts: dict, event_type: str, source: str = SOURCE_RE
             "execution_detail": execution_result["execution_detail"],
             "execution_timestamp": execution_result["execution_timestamp"],
             "source": source,
+            "ptp_offer_decision": ptp_offer["offer_ptp"],
+            "ptp_trigger_category": ptp_offer["trigger_category"],
+            "ptp_offer_reason": ptp_offer["reason"],
+            "retry_attempt_number": case_facts.get("retry_attempt_number"),
+            "ltv_tier": case_facts.get("ltv_tier"),
+            "payment_rail": case_facts.get("payment_rail"),
+            "cumulative_retries_this_txn": case_facts.get("cumulative_retries_this_txn"),
         }
     )
     _append_webhook_audit_row(webhook_row)
