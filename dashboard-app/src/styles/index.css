@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background-color: #F4F6FB;
+  color: #1C2030;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.6); opacity: 0.6; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+.pulse-dot::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.5;
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+@keyframes slide-in {
+  from { transform: translateX(20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.animate-slide-in {
+  animation: slide-in 0.15s ease-out;
+}
+
+/* Custom scrollbar for the dark custom-trigger terminal */
+.terminal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+.terminal-scroll::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+.terminal-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.terminal-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+  border: 2px solid #0b0f19;
+  background-clip: padding-box;
+}
+.terminal-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.38);
+}
+.terminal-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Custom scrollbar for light-background scrollable panels */
+.light-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #CBD2E1 transparent;
+}
+.light-scroll::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+.light-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.light-scroll::-webkit-scrollbar-thumb {
+  background-color: #CBD2E1;
+  border-radius: 9999px;
+  border: 2px solid #FFFFFF;
+  background-clip: padding-box;
+}
+.light-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #A8B1C7;
+}
+.light-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
