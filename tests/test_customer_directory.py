@@ -7,9 +7,9 @@ emails/customer_keys per test so runs never collide with each other or with
 real webhook traffic already in data/customer_history.db).
 
 Run with:
-    python pipeline/test_customer_directory.py
+    python tests/test_customer_directory.py
 or via pytest:
-    python -m pytest pipeline/test_customer_directory.py -v
+    python -m pytest tests/test_customer_directory.py -v
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ import sys
 import uuid
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import customer_directory
+from pipeline import customer_directory
 
 
 def _new_email(label: str) -> str:

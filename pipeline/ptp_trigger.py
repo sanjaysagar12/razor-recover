@@ -29,7 +29,7 @@ case is even eligible for that whole flow to begin -- it never calls into
 any of them.
 
 Smoke test:
-    python pipeline/test_ptp_trigger.py
+    python tests/test_ptp_trigger.py
 """
 
 from __future__ import annotations

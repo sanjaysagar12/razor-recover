@@ -11,6 +11,8 @@ logs/pending_retries.csv
 logs/webhook_log.csv
 logs/promise_log.csv
 logs/ptp_outcome_log.csv
+logs/*.json
+!logs/samples/*.json
 
 # Live webhook state (not synthetic training data)
 data/customer_history.db

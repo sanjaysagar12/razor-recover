@@ -12,9 +12,9 @@ customer_ptp_stats assertions are exact regardless of how many times this
 suite has run before against the same data/customer_history.db.
 
 Run with:
-    python pipeline/test_ptp_honor_break.py
+    python tests/test_ptp_honor_break.py
 or via pytest:
-    python -m pytest pipeline/test_ptp_honor_break.py -v
+    python -m pytest tests/test_ptp_honor_break.py -v
 """
 
 from __future__ import annotations
@@ -24,12 +24,10 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import customer_ptp_stats
-import promise_store
-import ptp_outcomes
-from guardrails import IST
+from pipeline import customer_ptp_stats, promise_store, ptp_outcomes
+from pipeline.guardrails import IST
 
 TODAY_IST = datetime.now(IST).date()
 TODAY_ISO = TODAY_IST.isoformat()

@@ -15,9 +15,9 @@ the API is never even reached for a non-approved promise, test 3 simulates
 an API failure and asserts it is logged honestly, never masked as success.
 
 Run with:
-    python pipeline/test_promise_reschedule.py
+    python tests/test_promise_reschedule.py
 or via pytest:
-    python -m pytest pipeline/test_promise_reschedule.py -v
+    python -m pytest tests/test_promise_reschedule.py -v
 """
 
 from __future__ import annotations
@@ -25,8 +25,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE_DIR / "pipeline"))
 
+# Bare (not `from pipeline import ...`) so this module object is the exact
+# same one execute_action.py/run_case.py bare-import internally -- required
+# for the monkeypatches below (tests 2/3) to actually reach the code path
+# under test instead of silently no-op'ing against a separate copy.
 import execute_action
 import guardrails
 import promise_store

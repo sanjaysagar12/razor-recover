@@ -3,21 +3,73 @@
 AI revenue-recovery agent for failed subscription payments, built against
 Razorpay's **test-mode** APIs.
 
-> **Status:** Phases 1-8 implemented — data generation, tree model + SHAP,
-> confidence gate, LLM layer, guardrails, batch simulation/audit log, and
-> the demo CLI below.
+> **Status:** The core batch pipeline (data generation → tree model + SHAP →
+> confidence gate → LLM layer → guardrails → batch simulation/audit log →
+> demo CLI, below) is complete. The system has since grown a live Razorpay
+> webhook receiver + dashboard SPA, and a full promise-to-pay (PTP)
+> subsystem (offer eligibility, LLM date extraction, its own guardrail
+> pass, honor/break tracking, and per-customer risk-tier routing). See
+> [Roadmap](#roadmap) for what's built vs. still open, and
+> [ARCHITECTURE.md](ARCHITECTURE.md) for the full as-built system
+> reference.
+
+## Roadmap
+
+**Built** (see [ARCHITECTURE.md](ARCHITECTURE.md) for the full as-built reference):
+
+- **Phases 0-8** — synthetic data generation, tree model + SHAP, confidence
+  gate, LLM layer (Claude/Gemini), guardrails, batch simulation/audit log,
+  and the demo CLI (all covered in this README, below).
+- **Phases 9-10** — live Razorpay webhook receiver (`webhook_receiver.py`)
+  and a read-only dashboard SPA (`dashboard-app/`) polling the same
+  pipeline's decisions in real time. See [README_WEBHOOK.md](README_WEBHOOK.md).
+- **Phases 11-15** — promise-to-pay (PTP) subsystem: reply intake, LLM date
+  extraction, a capped clarification loop for ambiguous replies, its own
+  guardrail pass, and reschedule execution. See [PTP_FLOW.md](PTP_FLOW.md).
+- **Phases 16-17 and later** — PTP honor/break outcome tracking from
+  payment webhooks, per-customer risk-tier escalation (`normal → watch →
+  restricted`) feeding back into routing and guardrails, and a PTP
+  offer-eligibility gate keyed off an email-to-`customer_key` directory.
+
+**Still open** — see ARCHITECTURE.md's
+[Discrepancies & known gaps](ARCHITECTURE.md#6-discrepancies--known-gaps)
+for the current full list; notably:
+
+- `retry_scheduled` actions and an NPCI-peak-window PTP guardrail
+  adjustment don't actually get scheduled/rescheduled yet — nothing reads
+  `logs/pending_retries.csv`, and `retry_time_predictor.py` (a module one
+  fallback path tries to import) doesn't exist yet.
+- No reset path out of the `"restricted"` risk tier — it's a one-way door
+  pending a reviewed human-override endpoint.
+- No authentication on the dashboard or its `/api/*` endpoints (a
+  deliberate current-phase tradeoff, not an oversight).
 
 ## Project structure
 
 ```
 revenue-recovery/
-├── data/                     # datasets (placeholder for now)
-├── models/models/artifacts/  # trained model artifacts (placeholder for now)
-├── pipeline/                 # scripts: Razorpay client, verification, etc.
-├── logs/                     # run logs
-├── demo/                     # demo assets/scripts
+├── pipeline/              # core package: confidence gate, SHAP, LLM layer,
+│                          #   guardrails, PTP subsystem, batch orchestrator,
+│                          #   Razorpay client
+├── scripts/               # phase-runner CLIs (run_phase4.py, run_phase5.py,
+│                          #   verify_setup.py)
+├── tests/                 # pytest suite
+│   └── fixtures/          # test fixture data (sample_case.json)
+├── docs/                  # supplementary docs (llm_layer.md)
+├── demo/                  # Phase 8 demo CLI + showcase-case assets
+├── dashboard-app/         # React SPA — live dashboard + conversations UI
+├── data/                  # synthetic dataset + generator
+├── models/                # tree-model training + artifacts/ (trained .joblib files)
+├── logs/                  # run logs (mostly gitignored)
+│   └── samples/           # committed example pipeline outputs
+├── webhook_receiver.py    # Flask app: live webhook + dashboard/API entry point
+├── test_webhook_locally.py
 ├── requirements.txt
 ├── .env.example
+├── ARCHITECTURE.md        # system-as-built reference, including known gaps
+├── PTP_FLOW.md            # promise-to-pay subsystem deep dive
+├── README_WEBHOOK.md      # webhook receiver + dashboard setup/walkthrough
+├── PHASE7_REPORT.md       # Phase 7 batch-simulation before/after report
 └── README.md
 ```
 
@@ -71,7 +123,7 @@ Razorpay API, then fetches it back, to confirm your credentials work
 end to end:
 
 ```bash
-python pipeline/verify_setup.py
+python scripts/verify_setup.py
 ```
 
 Expected output on success:

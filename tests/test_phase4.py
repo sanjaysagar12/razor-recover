@@ -16,7 +16,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline import confidence_gate, run_phase4, shap_extract
+from pipeline import confidence_gate, shap_extract
+from scripts import run_phase4
 
 ROUTED_PCT_MIN = 5.0
 ROUTED_PCT_MAX = 50.0

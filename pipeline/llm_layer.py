@@ -11,7 +11,7 @@ The LLM never acts directly -- it only proposes recommended_action.
 Phase 6 guardrails get the final say on every case.
 
 Smoke test a single case:
-    python -m pipeline.llm_layer --case-file sample_case.json
+    python -m pipeline.llm_layer --case-file tests/fixtures/sample_case.json
 """
 
 from __future__ import annotations

@@ -526,7 +526,7 @@ described as working as named.
   `clarification_needed`. Nothing in `webhook_receiver.py` ever attaches an
   `action_scheduled_for` onto the extraction dict before calling `apply_ptp_guardrails`.
   The rule, its `_shift_scheduled_time_outside_npci_peak` adjustment logic, and its
-  `"adjusted"` guardrail-status branch are exercised by `pipeline/test_ptp_guardrails.py`
+  `"adjusted"` guardrail-status branch are exercised by `tests/test_ptp_guardrails.py`
   directly (constructing the extraction dict by hand) but are dead code on the real
   `/api/promise-reply` path.
 - **Even if it did fire, an `"adjusted"` verdict would never reach execution.**
