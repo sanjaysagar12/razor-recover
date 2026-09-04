@@ -17,7 +17,12 @@ function ptpOutcome(promise) {
   if (o.kind === 'scheduled') return { kind: 'scheduled', text: `Scheduled for: ${o.scheduled_for}` };
   if (o.kind === 'fallback') return { kind: 'fallback', text: `Fallback: automatic scheduling, scheduled ${o.scheduled_for || '--'}` };
   if (o.kind === 'requires_human_review') return { kind: 'review', text: `Flagged for human review (guardrail_status=${promise.guardrail_status || 'n/a'})` };
-  if (o.kind === 'reschedule_failed') return { kind: 'review', text: `Guardrail approved (date ${o.extracted_date || '--'}) but scheduling failed -- Razorpay API error` };
+  if (o.kind === 'reschedule_failed') {
+    const reason = o.limit_reached
+      ? 'Razorpay test-mode limit reached (max 30 payment links)'
+      : 'Razorpay API error';
+    return { kind: 'review', text: `Guardrail approved (date ${o.extracted_date || '--'}) but scheduling failed -- ${reason}` };
+  }
   return { kind: 'awaiting', text: 'Awaiting reply' };
 }
 
@@ -26,7 +31,12 @@ function systemBubbleForPromise(promise) {
   if (promise.status === 'fallback') return `No clear reply after multiple attempts -- falling back to an automatic schedule${promise.extracted_date ? ' for ' + promise.extracted_date : ''}.`;
   if (promise.status === 'scheduled') return `Got it -- payment reminder scheduled for ${promise.extracted_date}.`;
   if (promise.status === 'requires_human_review') return 'This reply needs a human to review it before scheduling anything.';
-  if (promise.outcome === 'reschedule_failed') return 'Guardrail approved this reply, but creating the payment link failed (Razorpay API error) -- not scheduled.';
+  if (promise.outcome === 'reschedule_failed') {
+    const reason = promise.scheduled_outcome?.limit_reached
+      ? 'Razorpay test-mode limit reached (max 30 payment links)'
+      : 'Razorpay API error';
+    return `Guardrail approved this reply, but creating the payment link failed (${reason}) -- not scheduled.`;
+  }
   if (promise.guardrail_status && promise.guardrail_status !== 'approved') return `Guardrail verdict: ${promise.guardrail_status} -- not auto-scheduled.`;
   return 'Reply received, still processing.';
 }
@@ -136,7 +146,10 @@ function PaymentLinkChip({ promise }) {
     );
   }
   if (kind === 'reschedule_failed') {
-    return <div className="mt-1.5 text-[11px] text-red-500 font-semibold">Payment link failed to generate</div>;
+    const text = promise.scheduled_outcome?.limit_reached
+      ? 'Payment link failed -- Razorpay test-mode limit reached (max 30 links)'
+      : 'Payment link failed to generate';
+    return <div className="mt-1.5 text-[11px] text-red-500 font-semibold">{text}</div>;
   }
   return null;
 }

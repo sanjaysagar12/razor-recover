@@ -82,3 +82,55 @@ def fetch_plan(plan_id: str) -> dict:
     """
     client = get_client()
     return client.plan.fetch(plan_id)
+
+
+def cancel_all_payment_links() -> dict:
+    """Cancels every payment link currently in 'created' status (active,
+    unpaid, not yet cancelled/expired/paid).
+
+    Exists because test-mode Razorpay accounts cap active payment links at
+    30 (see pipeline/execute_action.py's _send_payment_link /
+    execute_promise_reschedule -- both surface "test mode limit of 30
+    reached for payment_link" as execution_status="failed" once that cap is
+    hit). This is the operator escape hatch: free up the quota by cancelling
+    links this pipeline already created rather than doing it one by one in
+    the Razorpay dashboard.
+
+    Paginates client.payment_link.all() (100 per page, Razorpay's max
+    count) rather than relying on a default page size. Only attempts
+    cancel() on status=='created' -- paid/cancelled/expired links are
+    already terminal and client.payment_link.cancel() would just error on
+    them for no benefit. Each cancel is wrapped individually so one failure
+    (already cancelled between the list and cancel calls, network blip)
+    never aborts the rest of the batch.
+
+    Returns {"total_active": int, "cancelled": [ids], "failed": [{"id", "error"}]}.
+    """
+    client = get_client()
+    active_ids = []
+    skip = 0
+    page_size = 100
+    while True:
+        page = client.payment_link.all({"count": page_size, "skip": skip})
+        # The SDK's payment_link.all() nests results under "payment_links",
+        # not "items" (unlike client.payment_link.create()'s own return
+        # shape, or other resources like client.order.all()) -- verified
+        # against a live response; reading "items" here silently returned []
+        # every time, so cancel_all_payment_links always reported
+        # total_active=0 regardless of how many links actually existed.
+        links = page.get("payment_links", [])
+        active_ids.extend(link["id"] for link in links if link.get("status") == "created")
+        if len(links) < page_size:
+            break
+        skip += page_size
+
+    cancelled = []
+    failed = []
+    for link_id in active_ids:
+        try:
+            client.payment_link.cancel(link_id)
+            cancelled.append(link_id)
+        except Exception as exc:  # noqa: BLE001 -- one bad link must not abort the batch
+            failed.append({"id": link_id, "error": f"{type(exc).__name__}: {exc}"})
+
+    return {"total_active": len(active_ids), "cancelled": cancelled, "failed": failed}

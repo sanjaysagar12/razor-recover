@@ -4,6 +4,7 @@ import AuditTable from '../components/AuditTable.jsx';
 import WebhookLogTable from '../components/WebhookLogTable.jsx';
 import CaseDetailModal from '../components/CaseDetailModal.jsx';
 import ResetConfirmModal from '../components/ResetConfirmModal.jsx';
+import CancelPaymentLinksModal from '../components/CancelPaymentLinksModal.jsx';
 import Toasts from '../components/Toasts.jsx';
 import { useToasts } from '../data/useToasts.js';
 import { useLogsData } from '../data/useLogsData.js';
@@ -11,6 +12,7 @@ import { useLogsData } from '../data/useLogsData.js';
 export default function LogsPage({ paused, setPaused }) {
   const [selectedCaseId, setSelectedCaseId] = useState(null);
   const [showResetModal, setShowResetModal] = useState(false);
+  const [showCancelLinksModal, setShowCancelLinksModal] = useState(false);
   const { toasts, toast } = useToasts();
   const {
     filteredRows,
@@ -74,6 +76,16 @@ export default function LogsPage({ paused, setPaused }) {
               <line x1="14" y1="11" x2="14" y2="17" />
             </svg>
           </button>
+          <button
+            onClick={() => setShowCancelLinksModal(true)}
+            title="Cancel all active payment links"
+            className="w-9 h-9 rounded-lg border border-gray-200 flex items-center justify-center text-red-500 hover:bg-red-50 shrink-0"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+              <circle cx="12" cy="12" r="9" />
+              <line x1="8" y1="8" x2="16" y2="16" />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -127,6 +139,12 @@ export default function LogsPage({ paused, setPaused }) {
         open={showResetModal}
         onClose={() => setShowResetModal(false)}
         onDone={() => { setShowResetModal(false); refreshAll(); }}
+        toast={toast}
+      />
+      <CancelPaymentLinksModal
+        open={showCancelLinksModal}
+        onClose={() => setShowCancelLinksModal(false)}
+        onDone={() => setShowCancelLinksModal(false)}
         toast={toast}
       />
     </div>

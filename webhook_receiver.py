@@ -59,6 +59,7 @@ import promise_store  # noqa: E402
 import prompts  # noqa: E402
 import ptp_outcomes  # noqa: E402
 import ptp_trigger  # noqa: E402
+import razorpay_client  # noqa: E402
 import run_batch  # noqa: E402
 import run_case  # noqa: E402
 import train_tree_models  # noqa: E402
@@ -1597,6 +1598,28 @@ def api_customers():
     return jsonify({"customers": results, "count": len(results)})
 
 
+def _find_execution_detail_for_promise(promise_id: str) -> str | None:
+    """Looks up the raw Razorpay execution_detail text for a failed PTP
+    reschedule from logs/webhook_audit_log.csv -- promise_store's own
+    `promises` table only ever records outcome='reschedule_failed', never
+    the actual API error string, so this is the only place it survives.
+    Matched via routing_rationale, which run_case.run_promise_reschedule
+    writes as f"PTP guardrail-approved reschedule for promise_id={promise_id}"
+    -- there's no dedicated promise_id column on the audit row. Returns None
+    if no matching row exists (e.g. the audit log was reset after this
+    promise was created) -- callers must treat that as "reason unknown", not
+    an error."""
+    if not run_case.WEBHOOK_AUDIT_LOG_PATH.exists():
+        return None
+    df = pd.read_csv(run_case.WEBHOOK_AUDIT_LOG_PATH)
+    needle = f"promise_id={promise_id}"
+    match = df[df["routing_rationale"].astype(str).str.contains(needle, regex=False, na=False)]
+    if match.empty:
+        return None
+    detail = match.iloc[-1].get("execution_detail")
+    return detail if pd.notna(detail) else None
+
+
 def _promise_thread_entry(promise: dict) -> dict:
     """One promises-table row shaped for the conversations UI -- every field
     Phase 19's brief asks for, plus a derived `scheduled_outcome` summary so
@@ -1619,7 +1642,13 @@ def _promise_thread_entry(promise: dict) -> dict:
         # to create the payment link failed. That's a materially different
         # fact from "no reply yet" -- collapsing it into 'awaiting_reply'
         # would hide a real execution failure behind a generic waiting state.
-        scheduled_outcome = {"kind": "reschedule_failed", "extracted_date": promise.get("extracted_date")}
+        execution_detail = _find_execution_detail_for_promise(promise.get("promise_id"))
+        limit_reached = bool(execution_detail) and "limit" in execution_detail.lower() and "reached" in execution_detail.lower()
+        scheduled_outcome = {
+            "kind": "reschedule_failed",
+            "extracted_date": promise.get("extracted_date"),
+            "limit_reached": limit_reached,
+        }
     elif status in (promise_store.STATUS_PENDING, promise_store.STATUS_CLARIFYING):
         scheduled_outcome = {"kind": "awaiting_reply"}
     elif status == promise_store.STATUS_REQUIRES_HUMAN_REVIEW:
@@ -1787,6 +1816,31 @@ def api_reset_conversations():
 
     logger.warning("Customer Conversations reset triggered: cleared %s remote_addr=%s", cleared, request.remote_addr)
     return jsonify({"status": "reset", "cleared": cleared})
+
+
+# --------------------------------------------------------------------------
+# Operator escape hatch for Razorpay test mode's 30-active-payment-link cap
+# (see pipeline/execute_action.py's _send_payment_link / execute_promise_
+# reschedule -- both surface "test mode limit of 30 reached for
+# payment_link" as execution_status="failed" once that cap is hit). Cancels
+# every payment link this account currently has in 'created' (active,
+# unpaid) status via pipeline/razorpay_client.cancel_all_payment_links, so
+# an operator can free up the quota from the dashboard instead of cancelling
+# links one by one in the Razorpay dashboard.
+# --------------------------------------------------------------------------
+@app.route("/api/payment-links/cancel-all", methods=["POST"])
+def api_cancel_all_payment_links():
+    logger.warning("Cancel-all-payment-links triggered from dashboard remote_addr=%s", request.remote_addr)
+    try:
+        result = razorpay_client.cancel_all_payment_links()
+    except Exception as exc:
+        logger.exception("cancel_all_payment_links failed")
+        return jsonify({"status": "error", "message": f"{type(exc).__name__}: {exc}"}), 500
+    logger.warning(
+        "Cancel-all-payment-links complete: total_active=%d cancelled=%d failed=%d",
+        result["total_active"], len(result["cancelled"]), len(result["failed"]),
+    )
+    return jsonify({"status": "ok", **result})
 
 
 # --------------------------------------------------------------------------
