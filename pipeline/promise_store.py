@@ -72,6 +72,7 @@ def _connect():
                 extraction_confidence REAL,
                 guardrail_status TEXT,
                 payment_link_id TEXT,
+                payment_link_url TEXT,
                 outcome TEXT NOT NULL DEFAULT 'pending',
                 created_at TEXT NOT NULL,
                 resolved_at TEXT,
@@ -83,6 +84,7 @@ def _connect():
         )
         _migrate_clarification_columns(conn)
         _migrate_honor_tracking_columns(conn)
+        _migrate_payment_link_url_column(conn)
         yield conn
         conn.commit()
     finally:
@@ -121,6 +123,20 @@ def _migrate_honor_tracking_columns(conn: sqlite3.Connection) -> None:
     existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(promises)").fetchall()}
     if "late_recovery_at" not in existing_columns:
         conn.execute("ALTER TABLE promises ADD COLUMN late_recovery_at TEXT")
+
+
+def _migrate_payment_link_url_column(conn: sqlite3.Connection) -> None:
+    """Adds payment_link_url to a promises table that may already exist from
+    before this column was added (a table just created fresh by CREATE
+    TABLE IF NOT EXISTS above already has it and this is a no-op). No
+    backfill -- a pre-existing scheduled promise only ever had payment_link_id
+    persisted (see update_promise_payment_link's prior signature), and the
+    Razorpay short_url for it was never captured anywhere durable to backfill
+    from; those rows simply have payment_link_url=NULL going forward, same
+    as every other None-for-pre-existing-row convention this module uses."""
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(promises)").fetchall()}
+    if "payment_link_url" not in existing_columns:
+        conn.execute("ALTER TABLE promises ADD COLUMN payment_link_url TEXT")
 
 
 def create_promise(case_id: str, customer_id: str | None, raw_customer_reply: str) -> str:
@@ -195,15 +211,19 @@ def update_promise_guardrail(promise_id: str, guardrail_status: str) -> None:
         )
 
 
-def update_promise_payment_link(promise_id: str, payment_link_id: str) -> None:
+def update_promise_payment_link(promise_id: str, payment_link_id: str, payment_link_url: str | None = None) -> None:
     """Phase 14 success path -- stores the Razorpay payment_link_id created
-    for this promise. outcome is deliberately left untouched (stays
+    for this promise, plus its full short_url (client.payment_link.create's
+    own `short_url` field) so the dashboard can render a clickable link
+    without re-deriving one from just an id -- payment_link_url is optional
+    (defaults None) so existing callers that only ever had an id available
+    keep working unchanged. outcome is deliberately left untouched (stays
     'pending' -- a later phase moves it to honored/broken from webhook
     events, not from the act of scheduling itself)."""
     with _connect() as conn:
         conn.execute(
-            "UPDATE promises SET payment_link_id = ? WHERE promise_id = ?",
-            (payment_link_id, promise_id),
+            "UPDATE promises SET payment_link_id = ?, payment_link_url = ? WHERE promise_id = ?",
+            (payment_link_id, payment_link_url, promise_id),
         )
 
 

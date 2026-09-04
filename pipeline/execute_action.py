@@ -203,8 +203,12 @@ def execute_promise_reschedule(case: dict, promise: dict, guardrail_result: dict
     schedule a payment link for a promise the guardrails did not approve.
 
     Returns {execution_status, execution_mechanism, execution_detail,
-    execution_timestamp, payment_link_id} -- payment_link_id is None on
-    failure. Past the guardrail-status check, this never raises: any
+    execution_timestamp, payment_link_id, payment_link_url} --
+    payment_link_id/payment_link_url are both None on failure.
+    payment_link_url is Razorpay's own short_url for the link (the
+    customer-facing URL, not just the internal id) -- needed so the
+    dashboard can render/copy an actual clickable link rather than just an
+    opaque id. Past the guardrail-status check, this never raises: any
     Razorpay SDK/network failure is caught and returned as
     execution_status="failed", same contract as _send_payment_link (a failed
     execution must show up as a logged failure, never a crash or a
@@ -250,13 +254,15 @@ def execute_promise_reschedule(case: dict, promise: dict, guardrail_result: dict
         }
         link = client.payment_link.create(payload)
         link_id = link.get("id")
-        detail = f"{_PTP_RESCHEDULE_EXPLANATION} payment_link_id={link_id} short_url={link.get('short_url')}"
+        link_url = link.get("short_url")
+        detail = f"{_PTP_RESCHEDULE_EXPLANATION} payment_link_id={link_id} short_url={link_url}"
         return {
             "execution_status": "success",
             "execution_mechanism": f"payment_link_created:{link_id}",
             "execution_detail": detail,
             "execution_timestamp": timestamp,
             "payment_link_id": link_id,
+            "payment_link_url": link_url,
         }
     except Exception as exc:  # noqa: BLE001 -- any SDK/network failure must degrade to a logged failure, not crash
         detail = f"{_PTP_RESCHEDULE_EXPLANATION} payment_link creation FAILED: {type(exc).__name__}: {exc}"
@@ -266,4 +272,5 @@ def execute_promise_reschedule(case: dict, promise: dict, guardrail_result: dict
             "execution_detail": detail,
             "execution_timestamp": timestamp,
             "payment_link_id": None,
+            "payment_link_url": None,
         }

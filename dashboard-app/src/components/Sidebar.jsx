@@ -33,6 +33,12 @@ const navItems = [
       </svg>
     ),
   },
+];
+
+// Second group -- more operational/config-leaning pages than the daily-use
+// group above, visually separated the same way the reference sidebar splits
+// its primary nav from Settings/Sign out.
+const secondaryNavItems = [
   {
     key: 'run-batch',
     label: 'Run Batch',
@@ -65,36 +71,49 @@ const navItems = [
   },
 ];
 
+function NavButton({ item, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-3 px-3.5 py-3 rounded-xl text-[14px] font-semibold text-left transition-colors ${
+        active ? 'bg-accent/10 text-accent' : 'text-muted hover:bg-gray-50 hover:text-ink'
+      }`}
+    >
+      <span className="w-5 h-5 shrink-0">{item.icon}</span>
+      <span>{item.label}</span>
+    </button>
+  );
+}
+
 export default function Sidebar({ page = 'dashboard', onNavigate, live = true }) {
   return (
-    <aside className="w-[232px] shrink-0 bg-white border-r border-gray-100 px-3.5 py-5 flex flex-col gap-7 h-screen sticky top-0">
+    <aside className="w-[248px] shrink-0 bg-white border-r border-gray-100 px-4 py-6 flex flex-col gap-8 h-screen sticky top-0">
       <div className="flex items-center gap-2.5 px-2">
-        <span className="font-extrabold text-[13.5px] leading-tight">
-          razor-recover
-          <small className="block font-medium text-muted text-[11px]">AI pipeline</small>
+        
+        <span className="font-extrabold text-[19px] leading-tight text-ink">
+          Razor Recover
+          <small className="block font-medium text-muted text-[11px] mt-0.5">AI pipeline</small>
         </span>
       </div>
 
-      <nav className="flex flex-col gap-1">
-        {navItems.map((item) => {
-          const active = page === item.key;
-          return (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => onNavigate?.(item.key)}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-[10px] text-[13.5px] font-semibold text-left ${
-                active ? 'bg-accent/10 text-accent' : 'text-muted hover:bg-gray-50 hover:text-ink'
-              }`}
-            >
-              <span className="w-[18px] h-[18px] shrink-0">{item.icon}</span>
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-      </nav>
+      <div className="flex flex-col gap-5 mt-2">
+        <nav className="flex flex-col gap-1">
+          {navItems.map((item) => (
+            <NavButton key={item.key} item={item} active={page === item.key} onClick={() => onNavigate?.(item.key)} />
+          ))}
+        </nav>
 
-      <div className="mt-auto">
+        <div className="border-t border-gray-100" />
+
+        <nav className="flex flex-col gap-1">
+          {secondaryNavItems.map((item) => (
+            <NavButton key={item.key} item={item} active={page === item.key} onClick={() => onNavigate?.(item.key)} />
+          ))}
+        </nav>
+      </div>
+
+      <div className="mt-auto px-2">
         {live ? (
           <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 px-2.5 py-1 text-[11px] font-bold tracking-wide">
             <span className="relative w-1.5 h-1.5 rounded-full bg-emerald-500 pulse-dot" />

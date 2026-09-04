@@ -56,6 +56,7 @@ import execute_action  # noqa: E402
 import guardrails  # noqa: E402
 import llm_layer  # noqa: E402
 import promise_store  # noqa: E402
+import prompts  # noqa: E402
 import ptp_outcomes  # noqa: E402
 import ptp_trigger  # noqa: E402
 import run_batch  # noqa: E402
@@ -591,6 +592,13 @@ PROMISE_LOG_COLUMNS = [
     # row (not just the final outcome) so a reviewer can read the full
     # ask-again-or-give-up history for a case_id from this one file.
     "clarification_round", "status", "fallback_mechanism",
+    # Dashboard-preview fields (see prompts.py's PTP reply-template section)
+    # -- customer_message is the templated text the Customer Conversations
+    # page shows after a reply, never actually sent to the customer;
+    # payment_link_url is only ever set alongside a customer_message that
+    # references a real scheduled link, kept as its own column (not just
+    # parsed back out of customer_message) so it stays queryable on its own.
+    "customer_message", "payment_link_url",
 ]
 
 
@@ -604,6 +612,8 @@ def _append_promise_log(
     clarification_round: int = 0,
     status: str | None = None,
     fallback_mechanism: str | None = None,
+    customer_message: str | None = None,
+    payment_link_url: str | None = None,
 ) -> None:
     PROMISE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     extraction = extraction or {}
@@ -622,6 +632,8 @@ def _append_promise_log(
         "clarification_round": clarification_round,
         "status": status,
         "fallback_mechanism": fallback_mechanism,
+        "customer_message": customer_message,
+        "payment_link_url": payment_link_url,
     }
     # PROMISE_LOG_COLUMNS grew five extraction columns beyond the pre-existing
     # 6-column file this repo already shipped -- reindex any rows written
@@ -886,6 +898,12 @@ def api_promise_reply():
         else:
             gate_case = dict(original_case_facts)
             gate_case["customer_id"] = customer_id
+        # Re-checked live at reply time (not just at scoring time in
+        # run_case.run_recovery_case) for the same reason has_open_promise/
+        # current_risk_tier are: a reply can arrive after the payment
+        # already recovered by some other means (auto-retry, a later
+        # successful charge) -- see run_case.case_already_recovered.
+        gate_case["case_already_recovered"] = run_case.case_already_recovered(case_id)
 
         eligibility = ptp_trigger.should_offer_ptp(gate_case)
         if not eligibility["offer_ptp"]:
@@ -998,6 +1016,16 @@ def api_promise_reply():
     )
 
     reschedule_result = None
+    # Dashboard-preview text ONLY -- shown by the Customer Conversations page
+    # after this reply is processed so an operator can see what a customer-
+    # facing confirmation would say. Never sent to the customer: there is no
+    # SMS/email/notify call anywhere in this branch, and Razorpay's own
+    # notify{} block on the payment_link.create() call inside
+    # execute_action.execute_promise_reschedule is untouched -- see
+    # prompts.py's "Dashboard-display-only PTP reply templates" section for
+    # the full explanation of why this is deliberately a preview, not a send.
+    customer_message = None
+    payment_link_url = None
     if guardrail_result["guardrail_status"] == "approved":
         promise_record = {
             "promise_id": promise_id,
@@ -1014,10 +1042,20 @@ def api_promise_reply():
         }
         if reschedule_row["execution_status"] == "success":
             final_status = promise_store.STATUS_SCHEDULED
+            payment_link_url = reschedule_row.get("payment_link_url")
+            customer_message = prompts.build_ptp_scheduled_message(
+                case_context.get("amount"), extraction["extracted_date"], payment_link_url
+            )
+        else:
+            # Guardrails approved this reply, but the Razorpay API call
+            # itself failed (execution_status="reschedule_failed" case) --
+            # no link exists, so never show a link-based template for it.
+            customer_message = prompts.PTP_RESCHEDULE_FAILED_MESSAGE
 
     _append_promise_log(
         case_id, customer_id, promise_id, message, outcome, extraction,
         clarification_round=0, status=final_status,
+        customer_message=customer_message, payment_link_url=payment_link_url,
     )
 
     return (
@@ -1031,6 +1069,9 @@ def api_promise_reply():
                 "clarification_needed": extraction["clarification_needed"],
                 "guardrail_status": guardrail_result["guardrail_status"],
                 "reschedule": reschedule_result,
+                # Dashboard-display-only preview -- see the comment above
+                # customer_message's assignment; NOT an outbound send.
+                "customer_message": customer_message,
             }
         ),
         200,
@@ -1148,6 +1189,7 @@ def api_summary():
             {
                 "total_cases": 0, "routed_to_llm": 0, "guardrail_overrode": 0, "requires_human_review": 0,
                 "recovered": 0, "failed_or_pending": 0, "execution_status_breakdown": {},
+                "can_retry": 0, "cannot_retry": 0,
             }
         )
 
@@ -1157,6 +1199,24 @@ def api_summary():
     execution_status_breakdown = (
         df["execution_status"].fillna("unknown").value_counts().to_dict() if "execution_status" in df.columns else {}
     )
+
+    # Retry-eligibility breakdown for the dashboard's donut chart -- reuses
+    # run_batch.RECOVERABLE_ACTIONS (already the pipeline's own definition of
+    # "this final_action means a retry attempt happens", see that constant's
+    # docstring and pipeline_retried/baseline_retried below it) rather than
+    # inventing a second notion of "can retry" here. Deliberately excludes
+    # "recovered" rows from both buckets -- a payment that already succeeded
+    # isn't a retry decision at all, so lumping it into "cannot retry" would
+    # misrepresent it as a blocked case. Rows with no final_action yet
+    # (blank/NaN, e.g. a webhook still mid-pipeline) fall into neither
+    # bucket, same reasoning.
+    if "final_action" in df.columns:
+        can_retry_mask = df["final_action"].isin(run_batch.RECOVERABLE_ACTIONS)
+        cannot_retry_mask = df["final_action"].notna() & (df["final_action"] != "recovered") & ~can_retry_mask
+        can_retry = int(can_retry_mask.sum())
+        cannot_retry = int(cannot_retry_mask.sum())
+    else:
+        can_retry = cannot_retry = 0
 
     return jsonify(
         {
@@ -1169,6 +1229,8 @@ def api_summary():
             "recovered": recovered,
             "failed_or_pending": total - recovered,
             "execution_status_breakdown": execution_status_breakdown,
+            "can_retry": can_retry,
+            "cannot_retry": cannot_retry,
         }
     )
 
@@ -1543,7 +1605,11 @@ def _promise_thread_entry(promise: dict) -> dict:
     status = promise.get("status")
     outcome = promise.get("outcome")
     if status == promise_store.STATUS_SCHEDULED:
-        scheduled_outcome = {"kind": "scheduled", "scheduled_for": promise.get("extracted_date")}
+        scheduled_outcome = {
+            "kind": "scheduled",
+            "scheduled_for": promise.get("extracted_date"),
+            "payment_link_url": promise.get("payment_link_url"),
+        }
     elif status == promise_store.STATUS_FALLBACK:
         scheduled_outcome = {"kind": "fallback", "scheduled_for": promise.get("extracted_date")}
     elif outcome == promise_store.OUTCOME_RESCHEDULE_FAILED:
@@ -1572,7 +1638,31 @@ def _promise_thread_entry(promise: dict) -> dict:
         "status": status,
         "outcome": promise.get("outcome"),
         "payment_link_id": promise.get("payment_link_id"),
+        "payment_link_url": promise.get("payment_link_url"),
         "scheduled_outcome": scheduled_outcome,
+    }
+
+
+def _case_recovery_info(match: pd.DataFrame) -> dict | None:
+    """Whether this case_id's payment recovered -- scanned across EVERY row
+    for the case, not just the first. run_case.run_recovered_case appends a
+    SEPARATE row (final_action=='recovered') under the same case_id when a
+    subscription.charged webhook arrives, so a case's opening
+    payment.failed row (case_summary, below) never carries this fact
+    itself -- it has to be looked up across the case's full row history.
+    Returns None if the case never recovered; the timestamp/amount of the
+    LAST recovered row otherwise (case_id is 1:1 with a single underlying
+    payment, so more than one recovered row is not expected in practice,
+    but 'most recent wins' degrades sanely if it ever happens)."""
+    recovered_rows = match[match["final_action"] == "recovered"]
+    if recovered_rows.empty:
+        return None
+    last = recovered_rows.iloc[-1]
+    amount = last.get("amount")
+    return {
+        "recovered": True,
+        "recovered_at": last.get("timestamp"),
+        "amount": amount if pd.notna(amount) else None,
     }
 
 
@@ -1588,6 +1678,7 @@ def api_customer_conversations(email):
     cases = []
     for case_id in case_ids:
         case_summary = None
+        recovery = None
         if df is not None:
             match = df[df["case_id"] == case_id]
             if not match.empty:
@@ -1597,9 +1688,10 @@ def api_customer_conversations(email):
                 # function's docstring -- so amount/decline_code context
                 # comes from the earliest row, not whichever happens last).
                 case_summary = _df_records(match.iloc[[0]])[0]
+                recovery = _case_recovery_info(match)
 
         promises = [_promise_thread_entry(p) for p in promise_store.get_promises_for_case(case_id)]
-        cases.append({"case_id": case_id, "case_summary": case_summary, "promises": promises})
+        cases.append({"case_id": case_id, "case_summary": case_summary, "promises": promises, "recovery": recovery})
 
     return jsonify({"email": email, "customer_keys": customer_keys, "cases": cases, "case_count": len(cases)})
 

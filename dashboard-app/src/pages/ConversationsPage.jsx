@@ -9,6 +9,7 @@ const BANNER_CLASSES = {
   fallback: 'bg-amber-400/10 text-amber-700 border border-amber-400/30',
   awaiting: 'bg-gray-50 text-muted border border-gray-100',
   review: 'bg-red-400/10 text-red-500 border border-red-400/25',
+  recovered: 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/25',
 };
 
 function ptpOutcome(promise) {
@@ -51,7 +52,12 @@ function buildOpeningMessage(summary) {
 }
 
 function OpeningMessage({ summary }) {
-  if (!summary) return null;
+  // Only ever a real outreach if should_offer_ptp actually offered PTP for
+  // this case (ptp_offer_decision===true) -- a recovered-on-arrival case
+  // (no payment.failed ever ran through the pipeline for it) has this null,
+  // and rendering an "Outreach sent to customer" bubble for it would be
+  // fabricating an event that never happened.
+  if (!summary || summary.ptp_offer_decision !== true) return null;
   const { subject, body } = buildOpeningMessage(summary);
   return (
     <div className="bg-[#EEF1FF] border border-gray-100 border-l-[3px] border-l-accent rounded-lg px-3.5 py-3 mb-3.5 text-[13px] leading-relaxed">
@@ -62,13 +68,77 @@ function OpeningMessage({ summary }) {
   );
 }
 
-function OutcomeBanner({ promises }) {
+function ResolutionNotice({ recovery }) {
+  if (!recovery?.recovered) return null;
+  const when = recovery.recovered_at ? new Date(recovery.recovered_at).toLocaleString() : null;
+  return (
+    <div className="bg-emerald-500/10 border border-emerald-500/25 border-l-[3px] border-l-emerald-500 rounded-lg px-3.5 py-3 mb-3.5 text-[13px] leading-relaxed text-emerald-700">
+      <div className="font-bold">Payment recovered -- no reply needed</div>
+      {when && <div className="text-[11px] opacity-80 mt-0.5">Resolved {when}</div>}
+    </div>
+  );
+}
+
+function OutcomeBanner({ promises, recovery }) {
+  if (recovery?.recovered) {
+    return <div className={`rounded-lg px-3 py-2 text-[12.5px] font-semibold mb-3.5 ${BANNER_CLASSES.recovered}`}>Recovered -- resolved</div>;
+  }
   if (!promises.length) {
     return <div className={`rounded-lg px-3 py-2 text-[12.5px] font-semibold mb-3.5 ${BANNER_CLASSES.awaiting}`}>Awaiting reply</div>;
   }
   const latest = promises[promises.length - 1];
   const outcome = ptpOutcome(latest);
   return <div className={`rounded-lg px-3 py-2 text-[12.5px] font-semibold mb-3.5 ${BANNER_CLASSES[outcome.kind]}`}>{outcome.text}</div>;
+}
+
+function copyToClipboard(text) {
+  try {
+    navigator.clipboard?.writeText(text);
+  } catch {
+    // Clipboard API unavailable (non-HTTPS/older browser) -- the link is
+    // still visible and selectable by hand, so this is a silent no-op, not
+    // a broken row.
+  }
+}
+
+// Payment-link display for one promise row -- Task 1: a customer-facing
+// link.id alone isn't clickable, so this renders the real short_url when
+// the row is scheduled, and an explicit pending/failed state otherwise --
+// never a blank line where a link might have been.
+function PaymentLinkChip({ promise }) {
+  const kind = promise.scheduled_outcome?.kind;
+  if (kind === 'scheduled') {
+    const url = promise.scheduled_outcome?.payment_link_url || promise.payment_link_url;
+    if (!url) {
+      // Guardrail-approved and STATUS_SCHEDULED, but no URL on the row --
+      // only expected for a promise scheduled before payment_link_url
+      // started being persisted. Shown as pending, never left blank.
+      return <div className="mt-1.5 text-[11px] text-muted italic">Payment link pending...</div>;
+    }
+    return (
+      <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-accent font-semibold underline text-[11.5px] break-all"
+        >
+          {url}
+        </a>
+        <button
+          type="button"
+          onClick={() => copyToClipboard(url)}
+          className="text-muted hover:text-ink border border-gray-100 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+        >
+          Copy
+        </button>
+      </div>
+    );
+  }
+  if (kind === 'reschedule_failed') {
+    return <div className="mt-1.5 text-[11px] text-red-500 font-semibold">Payment link failed to generate</div>;
+  }
+  return null;
 }
 
 function Thread({ promises }) {
@@ -88,6 +158,7 @@ function Thread({ promises }) {
           <div className="flex justify-start mt-2.5">
             <div className="max-w-[70%] rounded-xl rounded-bl-[3px] bg-[#EEF1FF] border border-accent/30 border-l-[3px] border-l-accent px-3.5 py-2.5 text-[13px] leading-relaxed">
               {systemBubbleForPromise(p)}
+              <PaymentLinkChip promise={p} />
             </div>
           </div>
         </div>
@@ -99,19 +170,30 @@ function Thread({ promises }) {
 function CaseCard({ caseEntry, onSend }) {
   const summary = caseEntry.case_summary || {};
   const promises = caseEntry.promises || [];
+  const recovery = caseEntry.recovery || null;
   const customerId = summary.customer_key || ('case:' + caseEntry.case_id);
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState('');
+  // Dashboard-preview only, from api_promise_reply's customer_message field
+  // (see webhook_receiver.py's own comment on that field) -- shown here so
+  // an operator can see what a customer-facing confirmation would say.
+  // Never an outbound send; cleared on the next send attempt so it can't be
+  // mistaken for a persisted part of the thread.
+  const [replyPreview, setReplyPreview] = useState(null);
 
   async function handleSend() {
     if (!message.trim()) { setStatus('Type a message first.'); return; }
     setSending(true);
     setStatus('Sending...');
-    const ok = await onSend(caseEntry.case_id, customerId, message);
+    setReplyPreview(null);
+    const result = await onSend(caseEntry.case_id, customerId, message);
     setStatus('');
     setSending(false);
-    if (ok) setMessage('');
+    if (result.ok) {
+      setMessage('');
+      setReplyPreview(result.customerMessage || null);
+    }
   }
 
   return (
@@ -127,26 +209,39 @@ function CaseCard({ caseEntry, onSend }) {
         </div>
       </div>
       <OpeningMessage summary={summary} />
-      <OutcomeBanner promises={promises} />
+      <OutcomeBanner promises={promises} recovery={recovery} />
       <Thread promises={promises} />
-      <div className="flex gap-2 items-center flex-wrap mt-1.5">
-        <input
-          type="text"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
-          placeholder="Reply as this customer..."
-          disabled={sending}
-          className="flex-1 min-w-[220px] bg-gray-50 text-ink border border-gray-100 rounded-lg px-2.5 py-2 text-sm disabled:opacity-50"
-        />
-        <button
-          disabled={sending}
-          onClick={handleSend}
-          className="bg-accent text-white rounded-lg px-4 py-2 font-bold text-sm disabled:opacity-50"
-        >
-          Send
-        </button>
-      </div>
+      <ResolutionNotice recovery={recovery} />
+      {replyPreview && (
+        <div className="bg-emerald-500/10 border border-emerald-500/25 border-l-[3px] border-l-emerald-500 rounded-lg px-3.5 py-3 mb-3.5 text-[13px] leading-relaxed">
+          <div className="text-[10.5px] tracking-wide text-muted mb-1.5">
+            Preview -- what we'd tell the customer (not sent automatically)
+          </div>
+          <div className="whitespace-pre-wrap">{replyPreview}</div>
+        </div>
+      )}
+      {recovery?.recovered ? (
+        <div className="text-muted text-xs mt-1.5">This payment has recovered -- no reply needed, replying is disabled.</div>
+      ) : (
+        <div className="flex gap-2 items-center flex-wrap mt-1.5">
+          <input
+            type="text"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
+            placeholder="Reply as this customer..."
+            disabled={sending}
+            className="flex-1 min-w-[220px] bg-gray-50 text-ink border border-gray-100 rounded-lg px-2.5 py-2 text-sm disabled:opacity-50"
+          />
+          <button
+            disabled={sending}
+            onClick={handleSend}
+            className="bg-accent text-white rounded-lg px-4 py-2 font-bold text-sm disabled:opacity-50"
+          >
+            Send
+          </button>
+        </div>
+      )}
       <div className="text-muted text-xs mt-2">{status}</div>
     </div>
   );
