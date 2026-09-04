@@ -1,0 +1,31 @@
+.env
+.env.example
+.git
+.gitignore
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.claude/
+
+# Node deps for the dashboard SPA -- dashboard-app/dist (the built static
+# output) is what the Flask app actually serves and IS copied in; only the
+# unbuilt source tree's node_modules is excluded.
+dashboard-app/node_modules/
+
+# Docs / reports, not needed at runtime
+ARCHITECTURE.md
+PHASE7_REPORT.md
+PTP_FLOW.md
+README.md
+README_WEBHOOK.md
+docs/
+
+# Live/generated state -- populated at runtime via the volume mounts in
+# docker-compose.yml, not baked into the image. Model artifacts under
+# models/artifacts/ are deliberately NOT excluded here.
+logs/*.log
+logs/*.csv
+logs/*.json
+!logs/samples/

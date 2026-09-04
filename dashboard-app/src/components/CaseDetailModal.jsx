@@ -1,4 +1,5 @@
 import { useCaseDetail } from '../data/useCaseDetail.js';
+import LogTrace from './LogTrace.jsx';
 
 function fmtBool(v) {
   if (v === true || v === 'True') return <Badge tone="good">true</Badge>;
@@ -220,7 +221,7 @@ export default function CaseDetailModal({ caseId, onClose }) {
                 {log_lines.length > 0 && (
                   <div className="mb-4">
                     <h4 className="text-[12.5px] font-bold mb-2">Log trace</h4>
-                    <pre className="bg-gray-50 border border-gray-100 rounded-lg p-2.5 text-[11px] max-h-[260px] overflow-auto whitespace-pre-wrap">{log_lines.join('\n')}</pre>
+                    <LogTrace lines={log_lines} maxHeight="260px" />
                   </div>
                 )}
               </>
@@ -239,11 +240,11 @@ export default function CaseDetailModal({ caseId, onClose }) {
 
               <Stepper row={row} />
 
-              <details className="mt-2.5 mb-4">
+              <details className="mt-2.5 mb-4" open>
                 <summary className="cursor-pointer text-muted text-xs font-semibold select-none">Log trace (logs/webhook_receiver.log, step-by-step)</summary>
-                <pre className="mt-2 bg-gray-50 border border-gray-100 rounded-lg p-2.5 text-[11px] max-h-[260px] overflow-auto whitespace-pre-wrap">
-                  {log_lines.length ? log_lines.join('\n') : '(no matching log lines -- may have been cleared by a reset)'}
-                </pre>
+                <div className="mt-2">
+                  <LogTrace lines={log_lines} title={`logs/webhook_receiver.log -- case_id=${row.case_id}`} maxHeight="260px" />
+                </div>
               </details>
             </>
           );

@@ -38,7 +38,7 @@ from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
 
 BASE_DIR = Path(__file__).resolve().parent
 PIPELINE_DIR = BASE_DIR / "pipeline"
@@ -2133,6 +2133,11 @@ def api_model_custom_report(upload_id):
 # and dashboard/logs.html are superseded by dashboard-app/src/pages/.
 # --------------------------------------------------------------------------
 DASHBOARD_DIST_DIR = BASE_DIR / "dashboard-app" / "dist"
+
+
+@app.route("/", methods=["GET"])
+def root():
+    return redirect("/dashboard")
 
 
 @app.route("/dashboard", methods=["GET"])

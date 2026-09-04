@@ -8,3 +8,4 @@ anthropic
 pydantic
 google-genai
 flask
+gunicorn
