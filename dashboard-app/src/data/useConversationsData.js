@@ -79,14 +79,18 @@ export function useConversationsData({ toast }) {
       const { ok, data } = await apiSendPromiseReply(caseId, customerId, message);
       if (!ok) {
         toast?.('err', 'Reply failed', data.message || 'unknown error');
-        return false;
+        return { ok: false };
       }
       toast?.('ok', 'Reply sent', `case ${caseId}`);
       await Promise.all([loadConversations(selectedEmail), refreshCustomers()]);
-      return true;
+      // customer_message is a dashboard-preview-only field (see
+      // webhook_receiver.api_promise_reply's own comment) -- never an
+      // outbound send, just text CaseCard shows so an operator can see what
+      // a customer-facing confirmation would say.
+      return { ok: true, customerMessage: data.customer_message || null };
     } catch (e) {
       toast?.('err', 'Reply error', String(e));
-      return false;
+      return { ok: false };
     }
   }
 

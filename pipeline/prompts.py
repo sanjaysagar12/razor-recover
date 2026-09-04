@@ -145,3 +145,44 @@ def build_user_prompt(case: dict) -> str:
         f"shap_top_features: {json.dumps(shap_for_prompt)}\n"
         f"case_facts: {json.dumps(case['case_facts'])}\n"
     )
+
+
+# --------------------------------------------------------------------------
+# Dashboard-display-only PTP reply templates.
+#
+# These are NOT prompts fed to an LLM -- they're plain string templates for
+# the text webhook_receiver.api_promise_reply hands back to the dashboard
+# (as `customer_message`) after processing a customer's PTP reply, so an
+# operator watching the Customer Conversations page can see what a
+# customer-facing confirmation would say. Grouped here anyway (not inlined
+# in webhook_receiver.py) because this is this repo's one existing place for
+# customer/case-facing text templates, same reasoning PROMISE_DATE_SYSTEM_
+# PROMPT and SYSTEM_PROMPT above already established for keeping prompt/
+# template text out of the request-handling code that uses it.
+#
+# IMPORTANT: nothing here is ever sent to the customer automatically. There
+# is no SMS/email/notify wiring attached to these strings -- see
+# execute_action.execute_promise_reschedule's payment_link.create() call,
+# whose notify{} block controls Razorpay's OWN payment-link notification and
+# is deliberately left untouched by this feature. If a real send path is
+# ever built, it must be wired up explicitly and separately; do not assume
+# customer_message being present anywhere means a message was actually
+# delivered to anyone.
+# --------------------------------------------------------------------------
+def build_ptp_scheduled_message(amount: float | None, promised_date: str, payment_link_url: str) -> str:
+    """Preview text for a successfully scheduled PTP reply (guardrail
+    approved AND a real Razorpay payment link was created). amount may be
+    missing (case_context's amount is best-effort, see webhook_receiver.
+    _promise_date_case_context) -- degrades to a generic phrase rather than
+    rendering a broken 'Rs None' string."""
+    amount_phrase = f"₹{amount:.2f}" if amount is not None else "the amount due"
+    return (
+        f"Thanks -- we've scheduled a reminder for {promised_date}. "
+        f"You can complete your payment of {amount_phrase} anytime before then here: {payment_link_url}"
+    )
+
+
+PTP_RESCHEDULE_FAILED_MESSAGE = (
+    "We've recorded your promise to pay, but couldn't generate a payment link right now "
+    "-- this has been flagged for a human to follow up and send one manually."
+)

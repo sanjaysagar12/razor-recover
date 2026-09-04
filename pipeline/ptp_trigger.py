@@ -48,6 +48,7 @@ from customer_ptp_stats import RISK_TIER_RESTRICTED, get_risk_tier
 # contract (see webhook_receiver.py's ptp_trigger_category audit column and
 # dashboard/index.html's badge-label lookup).
 CATEGORY_HARD_DECLINE = "hard_decline"
+CATEGORY_ALREADY_RECOVERED = "already_recovered"
 CATEGORY_OPEN_PROMISE_EXISTS = "open_promise_exists"
 CATEGORY_RESTRICTED_TIER = "restricted_tier"
 CATEGORY_FIRST_FAILURE_AWAITING_AUTO_RETRY = "first_failure_awaiting_auto_retry"
@@ -118,18 +119,23 @@ def should_offer_ptp(case: dict) -> dict:
          same precedent guardrails.GUARDRAIL_RULES already sets for
          customer_risk_restricted (listed ahead of even hard_decline).
       2. hard_decline             (False, absolute veto)
-      3. open_promise_exists      (False, absolute veto)
-      4. high_ltv_first_failure   (True)
-      5. insufficient_funds_code  (True, independent of retry count)
-      6. approaching_retry_cap    (True)
-      7. first_failure_awaiting_auto_retry (False) -- only reached once
+      3. already_recovered        (False, absolute veto) -- the debt this
+         case represents is already settled (case_already_recovered==True,
+         see run_case.case_already_recovered); asking "when would you like
+         us to retry?" about money that's already back in is never correct,
+         so this is checked ahead of even open_promise_exists.
+      4. open_promise_exists      (False, absolute veto)
+      5. high_ltv_first_failure   (True)
+      6. insufficient_funds_code  (True, independent of retry count)
+      7. approaching_retry_cap    (True)
+      8. first_failure_awaiting_auto_retry (False) -- only reached once
          retry_attempt_number <= 1 and none of the True triggers above
          fired; an AMBIGUOUS-bucket first failure is treated the same as a
          CLEAR_SOFT one here (see decline_code_bucket note below) since the
          spec this was built against never addresses ambiguous codes
          explicitly, and "wait for the silent auto-retry" is the safer
          default either way.
-      8. retry_failed_once        (True) -- the fallback for everything
+      9. retry_failed_once        (True) -- the fallback for everything
          past a first failure that didn't hit a more specific True trigger
          above; covers retry_attempt_number 2 and beyond, not just exactly
          2, since more failed attempts is never LESS of a reason to ask the
@@ -154,6 +160,13 @@ def should_offer_ptp(case: dict) -> dict:
             "offer_ptp": False,
             "trigger_category": CATEGORY_HARD_DECLINE,
             "reason": "Decline code is a hard decline -- the payment method itself won't work, so a date commitment is meaningless.",
+        }
+
+    if case.get("case_already_recovered"):
+        return {
+            "offer_ptp": False,
+            "trigger_category": CATEGORY_ALREADY_RECOVERED,
+            "reason": "This payment has already recovered -- asking the customer when they'd like to retry would be asking about money that's already back in.",
         }
 
     if promise_store.has_open_promise(customer_id):

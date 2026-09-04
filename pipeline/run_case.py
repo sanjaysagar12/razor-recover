@@ -88,6 +88,12 @@ WEBHOOK_AUDIT_COLUMNS = run_batch.AUDIT_COLUMNS + [
     "ltv_tier",
     "payment_rail",
     "cumulative_retries_this_txn",
+    # Set only by run_promise_reschedule below, only on a successful
+    # execution -- the Razorpay short_url for the payment link this reply
+    # got, already captured in execution_detail as free text but not
+    # previously structured for the audit trail. None everywhere else, same
+    # convention as every other column above.
+    "payment_link_url",
 ]
 
 WEBHOOK_AUDIT_LOG_PATH = LOGS_DIR / "webhook_audit_log.csv"
@@ -260,6 +266,13 @@ def run_recovery_case(case_facts: dict, event_type: str, source: str = SOURCE_RE
     # record for this phase (see pipeline/ptp_trigger.py's module docstring
     # for what's explicitly out of scope): it does not affect final_action,
     # execution, or anything below.
+    #
+    # case_already_recovered guards against a late/redelivered payment.failed
+    # webhook arriving for a case_id that already has a recovered row (see
+    # case_already_recovered's docstring) -- checked here, not just at reply
+    # time, so a redelivered failure webhook never even offers a PTP
+    # conversation for money that's already back in.
+    case_facts["case_already_recovered"] = case_already_recovered(case_id)
     ptp_offer = ptp_trigger.should_offer_ptp(case_facts)
     logger.info(
         "case_id=%s: PTP-offer decision -- offer_ptp=%s trigger_category=%s reason=%s",
@@ -362,6 +375,25 @@ def run_recovered_case(
     return row
 
 
+def case_already_recovered(case_id: str) -> bool:
+    """True if ANY row already logged for case_id has final_action=='recovered'
+    -- i.e. run_recovered_case has already written a recovery row for this
+    exact case_id. Used as an idempotency guard so a late/redelivered
+    payment.failed webhook (or a customer reply arriving after the debt was
+    already settled) can never cause should_offer_ptp to offer, or
+    api_promise_reply to accept, a PTP conversation for money that's already
+    been recovered. Returns False (not an error) when the audit log doesn't
+    exist yet or has no rows for case_id -- same graceful-degradation
+    convention as should_offer_ptp's other optional-field reads."""
+    if not WEBHOOK_AUDIT_LOG_PATH.exists():
+        return False
+    df = pd.read_csv(WEBHOOK_AUDIT_LOG_PATH)
+    match = df[df["case_id"] == case_id]
+    if match.empty:
+        return False
+    return bool((match["final_action"] == "recovered").any())
+
+
 def run_promise_reschedule(
     case: dict, promise: dict, guardrail_result: dict, source: str = SOURCE_REAL_WEBHOOK
 ) -> dict:
@@ -411,7 +443,9 @@ def run_promise_reschedule(
     )
 
     if execution_result["execution_status"] == "success":
-        promise_store.update_promise_payment_link(promise_id, execution_result["payment_link_id"])
+        promise_store.update_promise_payment_link(
+            promise_id, execution_result["payment_link_id"], execution_result.get("payment_link_url")
+        )
         promise_store.update_promise_status(promise_id, promise_store.STATUS_SCHEDULED)
     else:
         promise_store.mark_promise_reschedule_failed(promise_id)
@@ -437,6 +471,7 @@ def run_promise_reschedule(
             "execution_detail": execution_result["execution_detail"],
             "execution_timestamp": execution_result["execution_timestamp"],
             "source": source,
+            "payment_link_url": execution_result.get("payment_link_url"),
         }
     )
     _append_webhook_audit_row(row)

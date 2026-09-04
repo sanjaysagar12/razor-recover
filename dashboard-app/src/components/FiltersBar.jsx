@@ -1,44 +1,42 @@
-const selectClass = 'bg-gray-50 text-ink border border-gray-100 rounded-md px-2 py-1 text-xs';
+import CustomSelect from './CustomSelect.jsx';
+
+const BOOL_OPTIONS = [
+  { value: '', label: 'all' },
+  { value: 'true', label: 'true' },
+  { value: 'false', label: 'false' },
+];
 
 export default function FiltersBar({ filters, onChange, execStatusOptions }) {
+  const execStatusOpts = [
+    { value: '', label: 'all' },
+    ...execStatusOptions.map((v) => ({ value: v, label: v })),
+  ];
+
   return (
     <div className="flex gap-5 flex-wrap items-center text-xs">
       <span className="flex items-center gap-1.5">
         <label className="text-muted">routed_to_llm</label>
-        <select
-          className={selectClass}
+        <CustomSelect
           value={filters.routed}
-          onChange={(e) => onChange({ ...filters, routed: e.target.value })}
-        >
-          <option value="">all</option>
-          <option value="true">true</option>
-          <option value="false">false</option>
-        </select>
+          options={BOOL_OPTIONS}
+          onChange={(v) => onChange({ ...filters, routed: v })}
+        />
       </span>
       <span className="flex items-center gap-1.5">
         <label className="text-muted">guardrail_overrode</label>
-        <select
-          className={selectClass}
+        <CustomSelect
           value={filters.overrode}
-          onChange={(e) => onChange({ ...filters, overrode: e.target.value })}
-        >
-          <option value="">all</option>
-          <option value="true">true</option>
-          <option value="false">false</option>
-        </select>
+          options={BOOL_OPTIONS}
+          onChange={(v) => onChange({ ...filters, overrode: v })}
+        />
       </span>
       <span className="flex items-center gap-1.5">
         <label className="text-muted">execution_status</label>
-        <select
-          className={selectClass}
+        <CustomSelect
           value={filters.execStatus}
-          onChange={(e) => onChange({ ...filters, execStatus: e.target.value })}
-        >
-          <option value="">all</option>
-          {execStatusOptions.map((v) => (
-            <option key={v} value={v}>{v}</option>
-          ))}
-        </select>
+          options={execStatusOpts}
+          onChange={(v) => onChange({ ...filters, execStatus: v })}
+        />
       </span>
     </div>
   );

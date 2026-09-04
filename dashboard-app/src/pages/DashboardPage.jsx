@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import StatCard from '../components/StatCard.jsx';
+import RetryDonutChart from '../components/RetryDonutChart.jsx';
 import PresetPanel from '../components/PresetPanel.jsx';
 import CustomTriggerPanel from '../components/CustomTriggerPanel.jsx';
 import FiltersBar from '../components/FiltersBar.jsx';
@@ -81,27 +82,56 @@ export default function DashboardPage({ paused, setPaused }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 px-7 pt-4 pb-1.5">
-        <div className="flex gap-3">
-          <StatCard label="Total cases" value={summary.total_cases ?? 0} tone="neutral" />
-          <StatCard label="Routed to LLM" value={summary.routed_to_llm ?? 0} tone="llm" />
+      <div className="flex items-stretch gap-3 px-7 pt-4 pb-1.5">
+        {/* Col 1 -- one tall card spanning the full row height */}
+        <div className="flex-1 min-w-[160px]">
+          <RetryDonutChart
+            canRetry={summary.can_retry ?? 0}
+            cannotRetry={summary.cannot_retry ?? 0}
+            totalCases={summary.total_cases ?? 0}
+            stacked
+          />
         </div>
-        <div className="flex gap-3">
-          <StatCard label="Recovered" value={summary.recovered ?? 0} tone="good" />
-          <StatCard label="Failed / pending" value={summary.failed_or_pending ?? 0} tone="bad" />
+
+        {/* Col 2 -- two stacked cards */}
+        <div className="flex-1 min-w-[160px] flex flex-col gap-3">
+          <StatCard
+            label="Recovered" value={summary.recovered ?? 0} tone="good"
+            description="Payments successfully recovered"
+          />
+          <StatCard
+            label="Needs human review" value={summary.requires_human_review ?? 0} tone="review"
+            description="Flagged for a person to check"
+          />
         </div>
-        <div className="flex gap-3">
-          <StatCard label="Guardrail overrode" value={summary.guardrail_overrode ?? 0} tone="override" />
-          <StatCard label="Needs human review" value={summary.requires_human_review ?? 0} tone="review" />
-        </div>
-        <div>
-          <div className="text-[11px] text-muted font-semibold mb-2">Execution outcomes</div>
-          <div className="flex gap-2 flex-wrap">
-            {execEntries.length > 0
-              ? execEntries.map(([key, value]) => (
-                <StatCard key={key} label={key} value={value} tone={execTileTone(key)} compact />
-              ))
-              : <div className="text-muted text-xs">No execution outcomes yet.</div>}
+
+        {/* Col 3 -- two stacked rows, each holding two cards side by side */}
+        <div className="flex-[2] min-w-0 flex flex-col gap-3">
+          <div className="flex gap-3">
+            <StatCard
+              label="Guardrail overrode" value={summary.guardrail_overrode ?? 0} tone="override"
+              description="Guardrail changed the model's decision"
+            />
+            <StatCard
+              label="Routed to LLM" value={summary.routed_to_llm ?? 0} tone="llm"
+              description="Ambiguous cases sent to the LLM"
+            />
+          </div>
+          <div className="flex items-stretch gap-3">
+            <StatCard
+              label="Failed / pending" value={summary.failed_or_pending ?? 0} tone="bad"
+              description="Not yet recovered"
+            />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-black mb-3">Execution outcomes</div>
+              <div className="flex gap-2 flex-wrap">
+                {execEntries.length > 0
+                  ? execEntries.map(([key, value]) => (
+                    <StatCard key={key} label={key} value={value} tone={execTileTone(key)} compact />
+                  ))
+                  : <div className="text-muted text-xs">No execution outcomes yet.</div>}
+              </div>
+            </div>
           </div>
         </div>
       </div>

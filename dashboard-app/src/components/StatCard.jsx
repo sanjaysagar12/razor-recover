@@ -40,7 +40,7 @@ function formatValue(value) {
   return value;
 }
 
-export default function StatCard({ label, value, tone = 'neutral', compact = false }) {
+export default function StatCard({ label, value, tone = 'neutral', compact = false, fill = false, description }) {
   const icon = ICONS[tone] || ICONS.neutral;
   const displayValue = formatValue(value);
 
@@ -58,15 +58,35 @@ export default function StatCard({ label, value, tone = 'neutral', compact = fal
     );
   }
 
+  // fill -- for a card that stands alone in a column next to taller stacked
+  // siblings (see DashboardPage's "Failed / pending" tile): grows to the
+  // column's full height and centers its content instead of sitting short
+  // with the number pinned to the top.
+  if (fill) {
+    return (
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-card p-5 min-w-[150px] h-full flex flex-col justify-center">
+        <div className="flex items-center gap-3">
+          <span className="w-10 h-10 flex items-center justify-center shrink-0 text-black">
+            <span className="w-6 h-6 block">{icon}</span>
+          </span>
+          <div className="text-base text-black font-bold">{label}</div>
+        </div>
+        <div className="text-6xl font-extrabold tabular mt-3 text-black">{displayValue}</div>
+        {description && <div className="text-[12.5px] text-muted mt-1.5">{description}</div>}
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white border border-gray-100 rounded-2xl shadow-card p-4 min-w-[150px] flex-1">
       <div className="flex items-start justify-between gap-3">
-        <div className="text-[11px] text-muted font-medium">{label}</div>
+        <div className="text-[13px] text-black font-bold">{label}</div>
         <span className="w-8 h-8 flex items-center justify-center shrink-0 text-black">
           <span className="w-5 h-5 block">{icon}</span>
         </span>
       </div>
       <div className="text-4xl font-extrabold tabular mt-2 text-black">{displayValue}</div>
+      {description && <div className="text-[11px] text-muted mt-1 leading-snug">{description}</div>}
     </div>
   );
 }
